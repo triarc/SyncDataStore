@@ -24,9 +24,12 @@ import java.io.InputStreamReader;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Date;
+import java.util.GregorianCalendar;
 import java.util.Iterator;
+import java.util.TimeZone;
 
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
@@ -112,6 +115,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 		this.mAccountManager = (AccountManager) context
 				.getSystemService(Context.ACCOUNT_SERVICE);
+		format.setTimeZone(TimeZone.getTimeZone("UTC"));
 	}
 
 	/**
@@ -515,7 +519,6 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 			values.put(dbFieldName, entity.getBoolean(name));
 			break;
 		case Date:
-
 			Date date = format.parse(entity.getString(name));
 			values.put(dbFieldName, date.getTime());
 			break;
