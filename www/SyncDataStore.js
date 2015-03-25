@@ -14,5 +14,12 @@ function SyncDataStore() {
 	SyncDataStore.prototype.requestSync = function(callback, error){
 		cordova.exec(callback, error, "SyncDataStore", "requestSync", []);
 	};
+	SyncDataStore.prototype.getLastUpdateTimestamp = function(collectionName, callback, error){
+		cordova.exec(callback, error, "SyncDataStore", "getLastUpdateTimestamp", [collectionName]);
+	};
+	SyncDataStore.prototype.isSyncing = function(callback, error){
+		cordova.exec(callback, error, "SyncDataStore", "isSyncing", []);
+	};
 };
 module.exports = new SyncDataStore();
+

@@ -7,6 +7,7 @@ import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaWebView;
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
@@ -14,7 +15,9 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SyncInfo;
 import android.content.SyncStatusObserver;
+import android.os.AsyncTask;
 import android.preference.PreferenceManager;
 import android.util.Log;
 
@@ -40,6 +43,7 @@ public class SyncDataStore extends CordovaPlugin {
 	protected void pluginInitialize() {
 		// TODO Auto-generated method stub
 		super.pluginInitialize();
+
 		this.changeSetReceivedReceiver = new BroadcastReceiver() {
 
 			@SuppressLint("NewApi")
@@ -86,6 +90,39 @@ public class SyncDataStore extends CordovaPlugin {
 		webView.getContext().unregisterReceiver(this.changeSetReceivedReceiver);
 	}
 
+	private void getLatestUpdate(final String collectionName,
+			final CallbackContext callbackContext) {
+		cordova.getThreadPool().execute(new Runnable() {
+			public void run() {
+				try {
+					SyncTypeCollection[] syncCollections = SyncAdapter
+							.getSyncCollections(SyncDataStore.this.webView
+									.getContext());
+					SyncTypeCollection foundCollection = null;
+					for (SyncTypeCollection syncTypeCollection : syncCollections) {
+						if (syncTypeCollection.getName().equalsIgnoreCase(
+								collectionName)) {
+							foundCollection = syncTypeCollection;
+							break;
+						}
+					}
+					long lastTimestamp = 0;
+					if (foundCollection != null) {
+						lastTimestamp = PreferenceManager
+								.getDefaultSharedPreferences(
+										SyncDataStore.this.webView.getContext())
+								.getLong(foundCollection.getName(), 0);
+					}
+
+					callbackContext.success("" + lastTimestamp);
+				} catch (Exception e) {
+					callbackContext.error("failed to read last timestamp");
+					e.printStackTrace();
+				}
+			}
+		});
+	}
+
 	@Override
 	public void onResume(boolean multitasking) {
 		super.onResume(multitasking);
@@ -116,9 +153,25 @@ public class SyncDataStore extends CordovaPlugin {
 			SyncUtils.TriggerRefresh();
 			callbackContext.success();
 			return true;
+		} else if (action.equals("getLastUpdateTimestamp")) {
+			this.getLatestUpdate(args.getString(0), callbackContext);
+			;
+		} else if (action.equals("isSyncing")) {
+			callbackContext.success(new Boolean(isSyncing()).toString());
 		}
 
 		return true;
+	}
+
+	private boolean isSyncing() {
+		ContentResolver contentResolver = this.webView.getContext()
+				.getContentResolver();
+		for (SyncInfo syncInfo : contentResolver.getCurrentSyncs()) {
+			if (syncInfo.authority.equals(SyncUtils.CONTENT_AUTHORITY)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void unRegister(CallbackContext callbackContext) {
@@ -126,6 +179,9 @@ public class SyncDataStore extends CordovaPlugin {
 			SyncUtils.DeleteAccount(this.webView.getContext());
 			for (SyncTypeCollection syncTypeCollection : SyncAdapter
 					.getSyncCollections(this.webView.getContext())) {
+				PreferenceManager
+						.getDefaultSharedPreferences(this.webView.getContext())
+						.edit().remove(syncTypeCollection.getName()).commit();
 				for (SyncType syncType : syncTypeCollection.getTypes()) {
 					try {
 						File dbfile = this.webView.getContext()

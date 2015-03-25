@@ -17,10 +17,12 @@
 package com.triarc.sync;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.SocketTimeoutException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -28,18 +30,24 @@ import java.util.Calendar;
 import java.util.Collection;
 import java.util.Date;
 import java.util.GregorianCalendar;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map.Entry;
 import java.util.TimeZone;
 
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpRequestRetryHandler;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.params.BasicHttpParams;
+import org.apache.http.params.HttpConnectionParams;
+import org.apache.http.params.HttpParams;
 import org.apache.http.protocol.HTTP;
+import org.apache.http.protocol.HttpContext;
 import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -57,6 +65,7 @@ import android.content.SyncResult;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.util.Log;
@@ -91,7 +100,11 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 	public static final String SYNC_FINISHED = "SyncFinished";
 
 	public static final String SYNC_FIELDS = "SyncFields";
-
+	public static final int UNCHANGED = 0;
+	public static final int UPDATED = 1;
+	public static final int DELETED = 2;
+	public static final int ADDED = 3;
+	
 	private AccountManager mAccountManager;
 
 	private SyncResult syncResult;
@@ -139,12 +152,43 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 	@Override
 	public void onPerformSync(Account account, Bundle extras, String authority,
 			ContentProviderClient provider, SyncResult syncResult) {
+		Date start = new Date();
 		this.syncResult = syncResult;
 		this.notifySyncStart();
 		for (SyncTypeCollection type : getSyncCollections(this.getContext())) {
 			syncTypeCollection(type);
 		}
 		this.notifySyncFinished();
+		long duration = (new java.util.Date()).getTime() - start.getTime();
+		Log.d(TAG, "Sync finished in " + duration + "ms");
+	}
+
+	private void sendLogs() {
+		final LogCollector mLogCollector = new LogCollector(
+				SyncAdapter.this.getContext());
+		new AsyncTask<Void, Void, Boolean>() {
+			@Override
+			protected Boolean doInBackground(Void... params) {
+				mLogCollector.collect();
+				String path = SyncUtils.GetWebApiPath(SyncAdapter.this
+						.getContext());
+				if (path == null)
+					return true;
+				mLogCollector.sendLog(path);
+				return true;
+			}
+
+			@Override
+			protected void onPreExecute() {
+				// showDialog(DIALOG_PROGRESS_COLLECTING_LOG);
+			}
+
+			@Override
+			protected void onPostExecute(Boolean result) {
+
+			}
+
+		}.execute();
 	}
 
 	private void syncTypeCollection(SyncTypeCollection typeCollection) {
@@ -157,8 +201,10 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				return;
 			}
 
-			DefaultHttpClient httpclient = new DefaultHttpClient(
-					new BasicHttpParams());
+			HttpParams my_httpParams = new BasicHttpParams();
+			HttpConnectionParams.setConnectionTimeout(my_httpParams, 120000);
+			HttpConnectionParams.setSoTimeout(my_httpParams, 120000);
+			DefaultHttpClient httpclient = new DefaultHttpClient(my_httpParams);
 
 			String path = SyncUtils.GetWebApiPath(this.getContext());
 			if (path == null) {
@@ -180,12 +226,6 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 			httppost.setEntity(new StringEntity(entity.toString(), HTTP.UTF_8));
 
 			request.setHeader("Content-Type", "application/json; charset=utf-8");
-			Long latestUpdate = this.getLatestUpdate(typeCollection);
-
-			if (latestUpdate != null) {
-				String lastModified = "" + latestUpdate;
-				request.setHeader("If-None-Match", lastModified);
-			}
 
 			request.addHeader("Cookie", password);
 
@@ -211,40 +251,64 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 					String json = getStringForReader(reader);
 					JSONObject syncChangeSets = new JSONObject(json)
 							.getJSONObject("changeSetPerType");
+					HashMap<SyncType, JSONObject> hashMap = new HashMap<SyncType, JSONObject>();
 
+					// first save all
 					for (SyncType syncType : typeCollection.getTypes()) {
 						syncResult.madeSomeProgress();
 						if (syncChangeSets.has(syncType.getName())) {
 							JSONObject changeSetObject = syncChangeSets
 									.getJSONObject(syncType.getName());
 							updateLocalTypeData(changeSetObject, syncType,
-									syncResult, lastUpdate);
+									syncResult);
 
-							notifyWebApp(changeSetObject.toString(), syncType);
+							hashMap.put(syncType, changeSetObject);
+
 						}
+					}
+					// store collection update timestamp
+					PreferenceManager
+							.getDefaultSharedPreferences(this.getContext())
+							.edit()
+							.putLong(typeCollection.getName(), lastUpdate)
+							.commit();
+					// then notify all
+					for (Entry<SyncType, JSONObject> entry : hashMap.entrySet()) {
+						notifyWebApp(entry.getValue().toString(),
+								entry.getKey());
 					}
 				} else {
 					if (statusCode == 401) {
-
 						Log.w(TAG,
 								"Not authenticated, remove this password and remove account");
-						SyncUtils.DeleteAccount(this.getContext());
+						// SyncUtils.DeleteAccount(this.getContext());
+					} else {
+						ByteArrayOutputStream outstream = new ByteArrayOutputStream();
+						response.getEntity().writeTo(outstream);
+						String responseBody = outstream.toString();
+						Log.e(TAG, "Sync failed:" + responseBody);
 					}
 					syncResult.partialSyncUnavailable = true;
 				}
+			} catch (SocketTimeoutException e) {
+				e.printStackTrace();
 			} catch (Exception e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
+				sendLogs();
 			} finally {
 				try {
 					if (inputStream != null)
 						inputStream.close();
 				} catch (Exception squish) {
+					squish.printStackTrace();
+					sendLogs();
 				}
 			}
 		} catch (Exception e) {
 			Log.e(TAG, "Error reading from network: " + e.toString());
 			syncResult.stats.numIoExceptions++;
+			sendLogs();
 			return;
 		}
 		Log.i(TAG, "Network synchronization complete");
@@ -273,6 +337,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		} catch (Exception e) {
 			syncResult.stats.numIoExceptions++;
 			e.printStackTrace();
+			sendLogs();
 		}
 	}
 
@@ -298,6 +363,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 			} catch (Exception e) {
 				syncResult.stats.numParseExceptions++;
 				e.printStackTrace();
+				sendLogs();
 			}
 		}
 		containerObject.put("syncSetPerType", changeSets);
@@ -308,13 +374,14 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		JSONObject changeSet = new JSONObject();
 		JSONArray entityVersions = new JSONArray();
 		SQLiteDatabase openDatabase = null;
+		Cursor query = null;
 		try {
 			changeSet.put("entityVersions", entityVersions);
 			openDatabase = openDatabase(type.getName());
 
-			Cursor query = openDatabase.query(type.getName(), new String[] {
-					"_id", "_timestamp", "_hasChanged" }, null, null, null,
-					null, null);
+			query = openDatabase
+					.query(type.getName(), new String[] { "_id", "_timestamp",
+							"__state" }, null, null, null, null, "__internalTimestamp ASC");
 			while (query.moveToNext()) {
 				syncResult.stats.numEntries++;
 				JSONObject jsonObject = new JSONObject();
@@ -322,22 +389,11 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				int id = query.getInt(0);
 				jsonObject.put("id", id);
 				jsonObject.put("timestamp", query.getLong(1));
-				if (query.getInt(2) == 1) {
-					Cursor fullEntityCursor = openDatabase.query(
-							type.getName(), null, "_id=" + id, null, null,
-							null, null);
-					if (fullEntityCursor.moveToNext()) {
-						try {
-							jsonObject.put("entity",
-									readEntity(type, fullEntityCursor));
-						} catch (Exception e) {
-							syncResult.stats.numIoExceptions++;
-							syncResult.databaseError = true;
-							e.printStackTrace();
-						}
-					}
+				int state = query.getInt(2);
+				if (state == ADDED || state == UPDATED) {
+					appendEntity(type, openDatabase, jsonObject, id);
 				}
-				// JSONObject jsonObject = readEntity(type, query);
+				jsonObject.put("state", state);
 				entityVersions.put(jsonObject);
 			}
 		} catch (Exception e) {
@@ -345,11 +401,38 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 			syncResult.stats.numSkippedEntries++;
 			syncResult.databaseError = true;
 			e.printStackTrace();
+			sendLogs();
 		} finally {
+			if (query != null)
+				query.close();
 			if (openDatabase != null && openDatabase.isOpen())
 				openDatabase.close();
 		}
 		return changeSet;
+	}
+
+	private void appendEntity(SyncType type, SQLiteDatabase openDatabase,
+			JSONObject jsonObject, int id) {
+		Cursor fullEntityCursor = null;
+		try {
+			fullEntityCursor = openDatabase.query(type.getName(),
+					null, "_id=" + id, null, null, null, null);
+
+			if (fullEntityCursor.moveToNext()) {
+				try {
+					jsonObject.put("entity",
+							readEntity(type, fullEntityCursor));
+				} catch (Exception e) {
+					syncResult.stats.numIoExceptions++;
+					syncResult.databaseError = true;
+					e.printStackTrace();
+					sendLogs();
+				}
+			}
+		} finally {
+			if (fullEntityCursor != null)
+				fullEntityCursor.close();
+		}
 	}
 
 	private JSONObject readEntity(SyncType type, Cursor query)
@@ -393,12 +476,6 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		}
 	}
 
-	private long getLatestUpdate(SyncTypeCollection typeCollection) {
-		long lastTimestamp = PreferenceManager.getDefaultSharedPreferences(
-				this.getContext()).getLong(typeCollection.getName(), 0);
-		return lastTimestamp;
-	}
-
 	private SQLiteDatabase openDatabase(String tableName) throws Exception {
 		try {
 			File dbfile = this.getContext().getDatabasePath(tableName);
@@ -409,15 +486,11 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 			Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
 
-			SQLiteDatabase mydb = SQLiteDatabase.openOrCreateDatabase(dbfile,
-					null);
-			Cursor rawQuery = mydb.rawQuery(
-					"SELECT name FROM sqlite_master WHERE type='table';", null);
-			while (rawQuery.moveToNext()) {
+			return SQLiteDatabase.openOrCreateDatabase(dbfile, null);
 
-			}
-			return mydb;
 		} catch (SQLiteException e) {
+			e.printStackTrace();
+			sendLogs();
 			throw e;
 		}
 	}
@@ -445,7 +518,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 	}
 
 	public void updateLocalTypeData(JSONObject changeSet, SyncType type,
-			final SyncResult syncResult, long updateTimestamp) throws Exception {
+			final SyncResult syncResult) throws Exception {
 		SQLiteDatabase db = openDatabase(type.getName());
 		try {
 			if (changeSet.has("added")) {
@@ -469,8 +542,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 					this.deleteRow(db, id, type);
 				}
 			}
-			PreferenceManager.getDefaultSharedPreferences(this.getContext())
-					.edit().putLong(type.getName(), updateTimestamp).commit();
+
 		} finally {
 			if (db.isOpen()) {
 				db.close();
@@ -500,7 +572,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		for (SyncField syncField : type.getFields()) {
 			this.addContentValueFor(contentValues, entity, syncField);
 		}
-		contentValues.put("_hasChanged", false);
+		contentValues.put("__state", UNCHANGED);
 
 		String localTableName = type.getName();
 		db.replaceOrThrow(localTableName, null, contentValues);

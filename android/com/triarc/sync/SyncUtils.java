@@ -31,7 +31,7 @@ import com.triarc.sync.accounts.GenericAccountService;
  */
 public class SyncUtils {
 	private static final long SYNC_FREQUENCY = 60; // 1 min (in seconds)
-	private static final String CONTENT_AUTHORITY = "com.triarc.sync.content";
+	public static final String CONTENT_AUTHORITY = "com.triarc.sync.content";
 	private static final String PREF_SETUP_COMPLETE = "setup_complete";
 	private static final String APIPATH_NAME = "ApiPath";
 	public static String GetWebApiPath(Context context){
