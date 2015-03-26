@@ -19,10 +19,15 @@ package com.triarc.sync;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.UnsupportedEncodingException;
 import java.net.SocketTimeoutException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -73,6 +78,7 @@ import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.triarc.InterprocessLock;
 import com.triarc.sync.accounts.GenericAccountService;
 
 /**
@@ -98,13 +104,15 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 	public static final String SYNC_START = "SyncStart";
 	public static final String SYNC_FINISHED = "SyncFinished";
+	public static final String SYNC_BLOCK = "SyncBlock";
+	public static final String SYNC_UNBLOCK = "SyncUnblock";
 
 	public static final String SYNC_FIELDS = "SyncFields";
 	public static final int UNCHANGED = 0;
 	public static final int UPDATED = 1;
 	public static final int DELETED = 2;
 	public static final int ADDED = 3;
-	
+
 	private AccountManager mAccountManager;
 
 	private SyncResult syncResult;
@@ -153,14 +161,26 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 	public void onPerformSync(Account account, Bundle extras, String authority,
 			ContentProviderClient provider, SyncResult syncResult) {
 		Date start = new Date();
-		this.syncResult = syncResult;
-		this.notifySyncStart();
-		for (SyncTypeCollection type : getSyncCollections(this.getContext())) {
-			syncTypeCollection(type);
+		try {
+			try {
+				this.syncResult = syncResult;
+				this.notifySyncStart();
+				for (SyncTypeCollection type : getSyncCollections(this
+						.getContext())) {
+					syncTypeCollection(type);
+				}
+			} finally {
+				this.notifySyncFinished();
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+
+			long duration = (new java.util.Date()).getTime() - start.getTime();
+			Log.d(TAG, "Sync finished in " + duration + "ms");
 		}
-		this.notifySyncFinished();
-		long duration = (new java.util.Date()).getTime() - start.getTime();
-		Log.d(TAG, "Sync finished in " + duration + "ms");
+
 	}
 
 	private void sendLogs() {
@@ -200,34 +220,17 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				Log.d(TAG, "Person not logged in, can't sync yet");
 				return;
 			}
-
-			HttpParams my_httpParams = new BasicHttpParams();
-			HttpConnectionParams.setConnectionTimeout(my_httpParams, 120000);
-			HttpConnectionParams.setSoTimeout(my_httpParams, 120000);
-			DefaultHttpClient httpclient = new DefaultHttpClient(my_httpParams);
-
 			String path = SyncUtils.GetWebApiPath(this.getContext());
 			if (path == null) {
 				Log.d(TAG, "web api path not set yet, ignore sync");
 				return;
 			}
 
-			String localTableName = typeCollection.getName();
-			Log.i(TAG, "Streaming data for type: " + localTableName);
+			DefaultHttpClient httpclient = createHttpClient();
 
-			String actionPath = path + "/" + typeCollection.getController()
-					+ "/" + typeCollection.getAction();
-
-			HttpRequestBase request;
-
-			HttpPost httppost = new HttpPost(actionPath);
-			request = httppost;
-			JSONObject entity = this.getVersionSets(typeCollection);
-			httppost.setEntity(new StringEntity(entity.toString(), HTTP.UTF_8));
-
-			request.setHeader("Content-Type", "application/json; charset=utf-8");
-
-			request.addHeader("Cookie", password);
+			MutableBoolean hasChanges = new MutableBoolean();
+			HttpRequestBase request = createRequest(typeCollection, password,
+					path, hasChanges);
 
 			InputStream inputStream = null;
 			String result = null;
@@ -236,57 +239,16 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				int statusCode = response.getStatusLine().getStatusCode();
 				if (statusCode >= 200 && statusCode < 300) {
 					HttpEntity httpEntity = response.getEntity();
-
-					long lastUpdate = 0;
-					Header header = response
-							.getFirstHeader("X-Application-Timestamp");
-					if (header != null) {
-						String value = header.getValue();
-						lastUpdate = Long.parseLong(value);
-					}
 					inputStream = httpEntity.getContent();
-					// json is UTF-8 by default
-					BufferedReader reader = new BufferedReader(
-							new InputStreamReader(inputStream, "UTF-8"), 8);
-					String json = getStringForReader(reader);
-					JSONObject syncChangeSets = new JSONObject(json)
-							.getJSONObject("changeSetPerType");
-					HashMap<SyncType, JSONObject> hashMap = new HashMap<SyncType, JSONObject>();
 
-					// first save all
-					for (SyncType syncType : typeCollection.getTypes()) {
-						syncResult.madeSomeProgress();
-						if (syncChangeSets.has(syncType.getName())) {
-							JSONObject changeSetObject = syncChangeSets
-									.getJSONObject(syncType.getName());
-							updateLocalTypeData(changeSetObject, syncType,
-									syncResult);
-
-							hashMap.put(syncType, changeSetObject);
-
-						}
-					}
-					// store collection update timestamp
-					PreferenceManager
-							.getDefaultSharedPreferences(this.getContext())
-							.edit()
-							.putLong(typeCollection.getName(), lastUpdate)
-							.commit();
-					// then notify all
-					for (Entry<SyncType, JSONObject> entry : hashMap.entrySet()) {
-						notifyWebApp(entry.getValue().toString(),
-								entry.getKey());
-					}
+					readResponse(typeCollection, inputStream, response);
 				} else {
 					if (statusCode == 401) {
 						Log.w(TAG,
 								"Not authenticated, remove this password and remove account");
 						// SyncUtils.DeleteAccount(this.getContext());
 					} else {
-						ByteArrayOutputStream outstream = new ByteArrayOutputStream();
-						response.getEntity().writeTo(outstream);
-						String responseBody = outstream.toString();
-						Log.e(TAG, "Sync failed:" + responseBody);
+						logResponse(response);
 					}
 					syncResult.partialSyncUnavailable = true;
 				}
@@ -298,6 +260,10 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				sendLogs();
 			} finally {
 				try {
+					this.releaseLock(typeCollection.getName());
+					if (hasChanges.getValue()) {
+						this.unlockUi(typeCollection.getName());
+					}
 					if (inputStream != null)
 						inputStream.close();
 				} catch (Exception squish) {
@@ -306,12 +272,117 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				}
 			}
 		} catch (Exception e) {
+			this.releaseLock(typeCollection.getName());
+
 			Log.e(TAG, "Error reading from network: " + e.toString());
 			syncResult.stats.numIoExceptions++;
 			sendLogs();
 			return;
 		}
 		Log.i(TAG, "Network synchronization complete");
+	}
+
+	private void logResponse(HttpResponse response) throws IOException {
+		ByteArrayOutputStream outstream = new ByteArrayOutputStream();
+		response.getEntity().writeTo(outstream);
+		String responseBody = outstream.toString();
+		Log.e(TAG, "Sync failed:" + responseBody);
+	}
+
+	private void readResponse(SyncTypeCollection typeCollection,
+			InputStream inputStream, HttpResponse response)
+			throws UnsupportedEncodingException, IOException, JSONException,
+			Exception {
+		long lastUpdate = 0;
+		Header header = response.getFirstHeader("X-Application-Timestamp");
+		if (header != null) {
+			String value = header.getValue();
+			lastUpdate = Long.parseLong(value);
+		}
+
+		// json is UTF-8 by default
+		BufferedReader reader = new BufferedReader(new InputStreamReader(
+				inputStream, "UTF-8"), 8);
+		String json = getStringForReader(reader);
+		JSONObject syncChangeSets = new JSONObject(json)
+				.getJSONObject("changeSetPerType");
+		HashMap<SyncType, JSONObject> notifyMap = new HashMap<SyncType, JSONObject>();
+
+		// first save all
+		for (SyncType syncType : typeCollection.getTypes()) {
+			syncResult.madeSomeProgress();
+			if (syncChangeSets.has(syncType.getName())) {
+				JSONObject changeSetObject = syncChangeSets
+						.getJSONObject(syncType.getName());
+				updateLocalTypeData(changeSetObject, syncType, syncResult,
+						typeCollection.getName());
+				notifyMap.put(syncType, changeSetObject);
+			}
+		}
+		// store collection update timestamp
+		PreferenceManager.getDefaultSharedPreferences(this.getContext()).edit()
+				.putLong(typeCollection.getName(), lastUpdate).commit();
+		// then notify all
+		for (Entry<SyncType, JSONObject> entry : notifyMap.entrySet()) {
+			notifyWebApp(entry.getValue().toString(), entry.getKey());
+		}
+	}
+
+	private HttpRequestBase createRequest(SyncTypeCollection typeCollection,
+			String password, String path, MutableBoolean hasChanges)
+			throws Exception, IOException, UnsupportedEncodingException {
+		String localTableName = typeCollection.getName();
+		Log.i(TAG, "Streaming data for type: " + localTableName);
+
+		String actionPath = path + "/" + typeCollection.getController() + "/"
+				+ typeCollection.getAction();
+
+		HttpRequestBase request;
+
+		HttpPost httppost = new HttpPost(actionPath);
+		request = httppost;
+
+		JSONObject entity;
+		this.createFileLock(typeCollection.getName());
+		try {
+			entity = this.getVersionSets(typeCollection, hasChanges);
+		} finally {
+			if (hasChanges.getValue()) {
+				// keep the ui locked until the change is confirmed from the
+				// server
+				hasChanges.setValue(true);
+				this.lockUi(typeCollection.getName());
+			} else {
+				this.releaseLock(typeCollection.getName());
+			}
+		}
+
+		httppost.setEntity(new StringEntity(entity.toString(), HTTP.UTF_8));
+
+		request.setHeader("Content-Type", "application/json; charset=utf-8");
+
+		request.addHeader("Cookie", password);
+		return request;
+	}
+
+	private void lockUi(String name) {
+		Intent intent = new Intent(SYNC_BLOCK);
+		intent.putExtra("collection", name);
+		this.getContext().sendBroadcast(intent);
+	}
+
+	private void unlockUi(String name) {
+		Intent intent = new Intent(SYNC_UNBLOCK);
+		intent.putExtra("collection", name);
+		this.getContext().sendBroadcast(intent);
+	}
+
+	private DefaultHttpClient createHttpClient() {
+		HttpParams my_httpParams = new BasicHttpParams();
+		HttpConnectionParams.setConnectionTimeout(my_httpParams, 120000);
+		HttpConnectionParams.setSoTimeout(my_httpParams, 120000);
+		DefaultHttpClient httpclient = new DefaultHttpClient(my_httpParams);
+		return httpclient;
 	}
 
 	private void notifySyncStart() {
@@ -351,15 +422,16 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return sb.toString();
 	}
 
-	private JSONObject getVersionSets(SyncTypeCollection collection)
-			throws JSONException {
+	private JSONObject getVersionSets(SyncTypeCollection collection,
+			MutableBoolean hasUpdates) throws Exception {
+		long startGetVersions = System.currentTimeMillis();
 		JSONObject containerObject = new JSONObject();
-
 		JSONObject changeSets = new JSONObject();
 
 		for (SyncType syncType : collection.getTypes()) {
 			try {
-				changeSets.put(syncType.getName(), getVersions(syncType));
+				changeSets.put(syncType.getName(),
+						getVersions(syncType, hasUpdates));
 			} catch (Exception e) {
 				syncResult.stats.numParseExceptions++;
 				e.printStackTrace();
@@ -367,10 +439,12 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 			}
 		}
 		containerObject.put("syncSetPerType", changeSets);
+		long durationInMs = System.currentTimeMillis() - startGetVersions;
+		Log.d(TAG, "get local entity versions in " + durationInMs + "ms");
 		return containerObject;
 	}
 
-	private JSONObject getVersions(SyncType type) {
+	private JSONObject getVersions(SyncType type, MutableBoolean hasUpdates) {
 		JSONObject changeSet = new JSONObject();
 		JSONArray entityVersions = new JSONArray();
 		SQLiteDatabase openDatabase = null;
@@ -379,9 +453,9 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 			changeSet.put("entityVersions", entityVersions);
 			openDatabase = openDatabase(type.getName());
 
-			query = openDatabase
-					.query(type.getName(), new String[] { "_id", "_timestamp",
-							"__state" }, null, null, null, null, "__internalTimestamp ASC");
+			query = openDatabase.query(type.getName(), new String[] { "_id",
+					"_timestamp", "__state" }, null, null, null, null,
+					"__internalTimestamp ASC");
 			while (query.moveToNext()) {
 				syncResult.stats.numEntries++;
 				JSONObject jsonObject = new JSONObject();
@@ -390,6 +464,9 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				jsonObject.put("id", id);
 				jsonObject.put("timestamp", query.getLong(1));
 				int state = query.getInt(2);
+				if (state != UNCHANGED) {
+					hasUpdates.setValue(true);
+				}
 				if (state == ADDED || state == UPDATED) {
 					appendEntity(type, openDatabase, jsonObject, id);
 				}
@@ -411,17 +488,25 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return changeSet;
 	}
 
+	private void createFileLock(String lockName) throws IOException {
+		InterprocessLock.lock(this.getContext(), lockName, "SyncDataStore");
+	}
+
+	private void releaseLock(String lockName) {
+		InterprocessLock.release(lockName, "SyncDataStore");
+	}
+
 	private void appendEntity(SyncType type, SQLiteDatabase openDatabase,
 			JSONObject jsonObject, int id) {
 		Cursor fullEntityCursor = null;
 		try {
-			fullEntityCursor = openDatabase.query(type.getName(),
-					null, "_id=" + id, null, null, null, null);
+			fullEntityCursor = openDatabase.query(type.getName(), null, "_id="
+					+ id, null, null, null, null);
 
 			if (fullEntityCursor.moveToNext()) {
 				try {
-					jsonObject.put("entity",
-							readEntity(type, fullEntityCursor));
+					jsonObject
+							.put("entity", readEntity(type, fullEntityCursor));
 				} catch (Exception e) {
 					syncResult.stats.numIoExceptions++;
 					syncResult.databaseError = true;
@@ -518,28 +603,28 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 	}
 
 	public void updateLocalTypeData(JSONObject changeSet, SyncType type,
-			final SyncResult syncResult) throws Exception {
+			final SyncResult syncResult, String lockName) throws Exception {
 		SQLiteDatabase db = openDatabase(type.getName());
 		try {
 			if (changeSet.has("added")) {
 				JSONArray added = changeSet.getJSONArray("added");
 				for (int index = 0; index < added.length(); index++) {
 					JSONObject entity = added.getJSONObject(index);
-					this.addOrUpdate(db, entity, type);
+					this.addOrUpdate(db, entity, type, lockName);
 				}
 			}
 			if (changeSet.has("updated")) {
 				JSONArray updated = changeSet.getJSONArray("updated");
 				for (int index = 0; index < updated.length(); index++) {
 					JSONObject entity = updated.getJSONObject(index);
-					this.addOrUpdate(db, entity, type);
+					this.addOrUpdate(db, entity, type, lockName);
 				}
 			}
 			if (changeSet.has("deleted")) {
 				JSONArray deleted = changeSet.getJSONArray("deleted");
 				for (int index = 0; index < deleted.length(); index++) {
 					int id = deleted.getInt(index);
-					this.deleteRow(db, id, type);
+					this.deleteRow(db, id, type, lockName);
 				}
 			}
 
@@ -562,12 +647,18 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return gson;
 	}
 
-	private void deleteRow(SQLiteDatabase db, Integer id, SyncType type) {
+	private void deleteRow(SQLiteDatabase db, Integer id, SyncType type,
+			String lockName) throws IOException {
+		// ensure that the lock is set
+		createFileLock(lockName);
 		db.delete(type.getName(), "_id=" + id.toString(), null);
 	}
 
-	private void addOrUpdate(SQLiteDatabase db, JSONObject entity, SyncType type)
-			throws JSONException, ParseException {
+	private void addOrUpdate(SQLiteDatabase db, JSONObject entity,
+			SyncType type, String lockName) throws JSONException,
+			ParseException, IOException {
+		// ensure that the lock is set
+		createFileLock(lockName);
 		ContentValues contentValues = new ContentValues();
 		for (SyncField syncField : type.getFields()) {
 			this.addContentValueFor(contentValues, entity, syncField);

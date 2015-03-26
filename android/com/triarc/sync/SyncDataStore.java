@@ -29,6 +29,8 @@ public class SyncDataStore extends CordovaPlugin {
 	private BroadcastReceiver changeSetReceivedReceiver;
 	private BroadcastReceiver startSyncReceiver;
 	private BroadcastReceiver stopSyncReceiver;
+	private BroadcastReceiver syncBlockReceiver;
+	private BroadcastReceiver syncUnblockReceiver;
 
 	protected void registerReceivers() {
 		webView.getContext().registerReceiver(changeSetReceivedReceiver,
@@ -37,6 +39,10 @@ public class SyncDataStore extends CordovaPlugin {
 				new IntentFilter(SyncAdapter.SYNC_START));
 		webView.getContext().registerReceiver(stopSyncReceiver,
 				new IntentFilter(SyncAdapter.SYNC_FINISHED));
+		webView.getContext().registerReceiver(syncBlockReceiver,
+				new IntentFilter(SyncAdapter.SYNC_BLOCK));
+		webView.getContext().registerReceiver(syncUnblockReceiver,
+				new IntentFilter(SyncAdapter.SYNC_UNBLOCK));
 	}
 
 	@Override
@@ -76,6 +82,25 @@ public class SyncDataStore extends CordovaPlugin {
 						.evaluateJavascript(
 								"DispoClient.NotificationHub.injectSyncState('finished')",
 								null);
+			}
+		};
+		this.syncBlockReceiver = new BroadcastReceiver() {
+			@SuppressLint("NewApi")
+			@Override
+			public void onReceive(Context context, Intent intent) {
+				SyncDataStore.this.webView.evaluateJavascript(
+						"DispoClient.NotificationHub.injectSyncState('block', "
+								+ intent.getStringExtra("collection") + ")",
+						null);
+			}
+		};
+		this.syncUnblockReceiver = new BroadcastReceiver() {
+			@SuppressLint("NewApi")
+			@Override
+			public void onReceive(Context context, Intent intent) {
+				SyncDataStore.this.webView.evaluateJavascript(
+						"DispoClient.NotificationHub.injectSyncState('unblock')",
+						null);
 			}
 		};
 		registerReceivers();
