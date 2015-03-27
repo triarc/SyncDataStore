@@ -343,7 +343,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		request = httppost;
 
 		JSONObject entity;
-		this.createFileLock(typeCollection.getName());
+		this.createFileLock(typeCollection.getName(), );
 		try {
 			entity = this.getVersionSets(typeCollection, hasChanges);
 		} finally {
