@@ -66,6 +66,7 @@ import android.content.ContentProviderClient;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SyncContext;
 import android.content.SyncResult;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
@@ -79,6 +80,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.triarc.InterprocessLock;
+import com.triarc.LockType;
 import com.triarc.sync.accounts.GenericAccountService;
 
 /**
@@ -93,7 +95,9 @@ import com.triarc.sync.accounts.GenericAccountService;
  * The system calls onPerformSync() via an RPC call through the IBinder object
  * supplied by SyncService.
  */
-class SyncAdapter extends AbstractThreadedSyncAdapter {
+public class SyncAdapter extends AbstractThreadedSyncAdapter {
+	public static final String LOCK_SOURCE_NAME = "SyncDataStore";
+
 	private static final String FIELD_PREFIX = "_";
 
 	public static final String TAG = "SyncAdapter";
@@ -212,7 +216,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 	}
 
 	private void syncTypeCollection(SyncTypeCollection typeCollection) {
-		Log.i(TAG, "Beginning network synchronization");
+		Log.i(TAG, "Beginning network synchronization for collection: " + typeCollection);
 		try {
 			String password = mAccountManager.getPassword(GenericAccountService
 					.GetAccount());
@@ -246,6 +250,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 					if (statusCode == 401) {
 						Log.w(TAG,
 								"Not authenticated, remove this password and remove account");
+						sendLogs();
 						// SyncUtils.DeleteAccount(this.getContext());
 					} else {
 						logResponse(response);
@@ -254,15 +259,15 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				}
 			} catch (SocketTimeoutException e) {
 				e.printStackTrace();
+				sendLogs();
 			} catch (Exception e) {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 				sendLogs();
 			} finally {
 				try {
-					this.releaseLock(typeCollection.getName());
 					if (hasChanges.getValue()) {
-						this.unlockUi(typeCollection.getName());
+						this.unlockUi(typeCollection);
 					}
 					if (inputStream != null)
 						inputStream.close();
@@ -272,14 +277,12 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				}
 			}
 		} catch (Exception e) {
-			this.releaseLock(typeCollection.getName());
-
 			Log.e(TAG, "Error reading from network: " + e.toString());
 			syncResult.stats.numIoExceptions++;
 			sendLogs();
 			return;
 		}
-		Log.i(TAG, "Network synchronization complete");
+		Log.i(TAG, "Network synchronization complete for collection: " + typeCollection.getName());
 	}
 
 	private void logResponse(HttpResponse response) throws IOException {
@@ -308,17 +311,32 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				.getJSONObject("changeSetPerType");
 		HashMap<SyncType, JSONObject> notifyMap = new HashMap<SyncType, JSONObject>();
 
-		// first save all
-		for (SyncType syncType : typeCollection.getTypes()) {
-			syncResult.madeSomeProgress();
-			if (syncChangeSets.has(syncType.getName())) {
-				JSONObject changeSetObject = syncChangeSets
-						.getJSONObject(syncType.getName());
-				updateLocalTypeData(changeSetObject, syncType, syncResult,
-						typeCollection.getName());
-				notifyMap.put(syncType, changeSetObject);
+		boolean isLockAquired = false;
+		try {
+			// first save all
+			for (SyncType syncType : typeCollection.getTypes()) {
+				syncResult.madeSomeProgress();
+				String name = syncType.getName();
+
+				if (syncChangeSets.has(name)) {
+					JSONObject changeSetObject = syncChangeSets
+							.getJSONObject(name);
+					if (hasTypeChanges(changeSetObject) && !isLockAquired){
+						this.aquireLock(typeCollection, LockType.write);
+						isLockAquired = true;		
+					}
+					updateLocalTypeData(changeSetObject, syncType, syncResult);
+					notifyMap.put(syncType, changeSetObject);
+				} else {
+					Log.w(TAG, "Server does not support syncing of " + name);
+					sendLogs();
+				}
 			}
+		} finally {
+			if (isLockAquired)
+				this.releaseLock(typeCollection, LockType.write);
 		}
+
 		// store collection update timestamp
 		PreferenceManager.getDefaultSharedPreferences(this.getContext()).edit()
 				.putLong(typeCollection.getName(), lastUpdate).commit();
@@ -343,7 +361,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		request = httppost;
 
 		JSONObject entity;
-		this.createFileLock(typeCollection.getName(), );
+		this.aquireLock(typeCollection, LockType.read);
 		try {
 			entity = this.getVersionSets(typeCollection, hasChanges);
 		} finally {
@@ -351,9 +369,12 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 				// keep the ui locked until the change is confirmed from the
 				// server
 				hasChanges.setValue(true);
-				this.lockUi(typeCollection.getName());
-			} else {
-				this.releaseLock(typeCollection.getName());
+				this.lockUi(typeCollection);
+			}
+			try {
+				this.releaseLock(typeCollection, LockType.read);
+			} catch (Exception e) {
+				Log.e(TAG, "Error on this level should never happen");
 			}
 		}
 
@@ -365,15 +386,15 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return request;
 	}
 
-	private void lockUi(String name) {
+	private void lockUi(SyncTypeCollection collection) {
 		Intent intent = new Intent(SYNC_BLOCK);
-		intent.putExtra("collection", name);
+		intent.putExtra("collection", collection.getName());
 		this.getContext().sendBroadcast(intent);
 	}
 
-	private void unlockUi(String name) {
+	private void unlockUi(SyncTypeCollection collection) {
 		Intent intent = new Intent(SYNC_UNBLOCK);
-		intent.putExtra("collection", name);
+		intent.putExtra("collection", collection.getName());
 		this.getContext().sendBroadcast(intent);
 	}
 
@@ -429,6 +450,7 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		JSONObject changeSets = new JSONObject();
 
 		for (SyncType syncType : collection.getTypes()) {
+			syncResult.madeSomeProgress();
 			try {
 				changeSets.put(syncType.getName(),
 						getVersions(syncType, hasUpdates));
@@ -488,12 +510,15 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return changeSet;
 	}
 
-	private void createFileLock(String lockName) throws IOException {
-		InterprocessLock.lock(this.getContext(), lockName, "SyncDataStore");
+	private void aquireLock(SyncTypeCollection collection, LockType lockType)
+			throws IOException {
+		InterprocessLock.lock(this.getContext(), collection.getName(),
+				LOCK_SOURCE_NAME, lockType);
 	}
 
-	private void releaseLock(String lockName) {
-		InterprocessLock.release(lockName, "SyncDataStore");
+	private void releaseLock(SyncTypeCollection collection, LockType lockType) {
+		InterprocessLock.release(this.getContext(), collection.getName(), LOCK_SOURCE_NAME,
+				lockType);
 	}
 
 	private void appendEntity(SyncType type, SQLiteDatabase openDatabase,
@@ -602,38 +627,57 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return builder.toString();
 	}
 
+	private boolean hasArrayValues(String fieldName, JSONObject changeSet)
+			throws JSONException {
+		if (changeSet.has(fieldName)) {
+			return changeSet.getJSONArray(fieldName).length() > 0;
+		}
+		return false;
+	}
+
+	private boolean hasTypeChanges(JSONObject changeSet) throws JSONException{
+		boolean hasAdded = hasArrayValues("added", changeSet);
+		boolean hasUpdated = hasArrayValues("updated", changeSet);
+		boolean hasDeleted = hasArrayValues("deleted", changeSet);
+		return hasAdded || hasUpdated || hasDeleted;
+	}
 	public void updateLocalTypeData(JSONObject changeSet, SyncType type,
-			final SyncResult syncResult, String lockName) throws Exception {
+			final SyncResult syncResult) throws Exception {
+		if (!hasTypeChanges(changeSet)) {
+			Log.d(TAG, "No updates for type:" + type.getName());
+			return;
+		}
+
 		SQLiteDatabase db = openDatabase(type.getName());
 		try {
-			if (changeSet.has("added")) {
+			if (hasArrayValues("added", changeSet)) {
 				JSONArray added = changeSet.getJSONArray("added");
 				for (int index = 0; index < added.length(); index++) {
 					JSONObject entity = added.getJSONObject(index);
-					this.addOrUpdate(db, entity, type, lockName);
+					this.addOrUpdate(db, entity, type);
 				}
 			}
-			if (changeSet.has("updated")) {
+			if (hasArrayValues("updated", changeSet)) {
 				JSONArray updated = changeSet.getJSONArray("updated");
 				for (int index = 0; index < updated.length(); index++) {
 					JSONObject entity = updated.getJSONObject(index);
-					this.addOrUpdate(db, entity, type, lockName);
+					this.addOrUpdate(db, entity, type);
 				}
 			}
-			if (changeSet.has("deleted")) {
+			if (hasArrayValues("deleted", changeSet)) {
 				JSONArray deleted = changeSet.getJSONArray("deleted");
 				for (int index = 0; index < deleted.length(); index++) {
 					int id = deleted.getInt(index);
-					this.deleteRow(db, id, type, lockName);
+					this.deleteRow(db, id, type);
 				}
 			}
-
 		} finally {
 			if (db.isOpen()) {
 				db.close();
 			}
 
 		}
+
 	}
 
 	private static final SimpleDateFormat format = new SimpleDateFormat(
@@ -647,18 +691,13 @@ class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return gson;
 	}
 
-	private void deleteRow(SQLiteDatabase db, Integer id, SyncType type,
-			String lockName) throws IOException {
-		// ensure that the lock is set
-		createFileLock(lockName);
+	private void deleteRow(SQLiteDatabase db, Integer id, SyncType type)
+			throws IOException {
 		db.delete(type.getName(), "_id=" + id.toString(), null);
 	}
 
-	private void addOrUpdate(SQLiteDatabase db, JSONObject entity,
-			SyncType type, String lockName) throws JSONException,
-			ParseException, IOException {
-		// ensure that the lock is set
-		createFileLock(lockName);
+	private void addOrUpdate(SQLiteDatabase db, JSONObject entity, SyncType type)
+			throws JSONException, ParseException, IOException {
 		ContentValues contentValues = new ContentValues();
 		for (SyncField syncField : type.getFields()) {
 			this.addContentValueFor(contentValues, entity, syncField);
