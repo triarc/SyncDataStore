@@ -1,5 +1,5 @@
 {
-    "version": "1.1.0",
+    "version": "1.2.3",
     "name": "com.triarc.syncdatastore",
     "cordova_name": "SyncDataStore",
     "description": "\r\n    SyncDataStore\r\n  ",
