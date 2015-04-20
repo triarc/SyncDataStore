@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+// ^(?!(eglCodecCommon))
 package com.triarc.sync;
 
 import java.io.BufferedReader;
@@ -345,7 +345,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				.putLong(typeCollection.getName(), lastUpdate).commit();
 		// then notify all
 		for (Entry<SyncType, JSONObject> entry : notifyMap.entrySet()) {
-			notifyWebApp(entry.getValue().toString(), entry.getKey());
+			JSONObject cs = entry.getValue();
+			JSONObject jsChangeSet = new JSONObject();
+			jsChangeSet.put("added", cs.getJSONArray("added"));
+			jsChangeSet.put("deleted", cs.getJSONArray("deleted"));
+			JSONArray newJsArray = new JSONArray();
+			JSONArray jsonArray = cs.getJSONArray("updated");
+			for(int index = 0; index < jsonArray.length(); index++){
+				newJsArray.put(jsonArray.getJSONObject(index).getJSONObject("entity"));
+			}
+			jsChangeSet.put("updated", newJsArray);
+			notifyWebApp(jsChangeSet.toString(), entry.getKey());
 		}
 	}
 
@@ -479,7 +489,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			openDatabase = openDatabase(collection);
 
 			query = openDatabase.query(type.getName(), new String[] { "_id",
-					"_timestamp", "__state" }, null, null, null, null,
+					"_timestamp", "__internalTimestamp", "__state" }, null, null, null, null,
 					"__internalTimestamp ASC");
 			while (query.moveToNext()) {
 				syncResult.stats.numEntries++;
@@ -488,7 +498,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				int id = query.getInt(0);
 				jsonObject.put("id", id);
 				jsonObject.put("timestamp", query.getLong(1));
-				int state = query.getInt(2);
+				jsonObject.put("clientTimestamp", query.getLong(2));
+				int state = query.getInt(3);
 				if (state != UNCHANGED) {
 					hasUpdates.setValue(true);
 				}
@@ -657,7 +668,12 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			if (hasArrayValues("updated", changeSet)) {
 				JSONArray updated = changeSet.getJSONArray("updated");
 				for (int index = 0; index < updated.length(); index++) {
-					JSONObject entity = updated.getJSONObject(index);
+					JSONObject updateSet = updated.getJSONObject(index);
+					int localEntityId = updateSet.getInt("id");
+					JSONObject entity = updateSet.getJSONObject("entity");
+					if (localEntityId != entity.getInt("id")) {
+						this.deleteRow(db, localEntityId, type);
+					}
 					this.addOrUpdate(db, entity, type);
 				}
 			}
@@ -701,6 +717,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		}
 		contentValues.put("__state", UNCHANGED);
 
+		contentValues.put("__internalTimestamp", entity.getLong("timestamp"));
 		String localTableName = type.getName();
 		db.replaceOrThrow(localTableName, null, contentValues);
 	}
