@@ -5,7 +5,7 @@
     version="1.2.3">
 
     <name>SyncDataStore</name>
-	<dependency id="com.triarc.interprocesslock" url="https://github.com/triarc/cordova-interprocess-lock.git"/>
+	<dependency id="com.triarc.sqliteplugin" url="https://github.com/triarc/cordova-sqlite.git"/>
   <description>
     SyncDataStore
   </description>
