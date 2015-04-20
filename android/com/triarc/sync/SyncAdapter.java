@@ -57,6 +57,7 @@ import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.pgsqlite.SQLiteAccess;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
@@ -116,6 +117,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	public static final int UPDATED = 1;
 	public static final int DELETED = 2;
 	public static final int ADDED = 3;
+
+	
 
 	private AccountManager mAccountManager;
 
@@ -505,11 +508,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			if (query != null)
 				query.close();
 			if (openDatabase != null && openDatabase.isOpen())
-				openDatabase.close();
+				closeDb(collection.getName());
 		}
 		return changeSet;
 	}
-
+	private void closeDb(String name){
+        SQLiteAccess.getInstance(this.getContext()).releaseDb(name);
+	}
 	private void aquireLock(SyncTypeCollection collection, LockType lockType)
 			throws IOException {
 		InterprocessLock.lock(this.getContext(), collection.getName(),
@@ -588,16 +593,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 	private SQLiteDatabase openDatabase(SyncTypeCollection collection) throws Exception {
 		try {
-			File dbfile = this.getContext().getDatabasePath(collection.getName());
-
-			if (!dbfile.exists()) {
-				dbfile.getParentFile().mkdirs();
-			}
-
-			Log.v("info", "Open sqlite db: " + dbfile.getAbsolutePath());
-
-			return SQLiteDatabase.openOrCreateDatabase(dbfile, null);
-
+			SQLiteDatabase db = SQLiteAccess.getInstance(this.getContext()).requestDb(collection.getName());
+			return db;
 		} catch (SQLiteException e) {
 			e.printStackTrace();
 			sendLogs();
@@ -673,7 +670,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			}
 		} finally {
 			if (db.isOpen()) {
-				db.close();
+				closeDb(collection.getName());
 			}
 
 		}

@@ -16,6 +16,8 @@
 
 package com.triarc.sync;
 
+import org.pgsqlite.SQLiteAccess;
+
 import android.app.Service;
 import android.content.Intent;
 import android.os.IBinder;
@@ -37,6 +39,7 @@ public class SyncService extends Service {
 
     private static final Object sSyncAdapterLock = new Object();
     private static SyncAdapter sSyncAdapter = null;
+    private static final String INSTANCE_NAME = "SyncDataStore";
 
     /**
      * Thread-safe constructor, creates static {@link SyncAdapter} instance.
@@ -45,6 +48,7 @@ public class SyncService extends Service {
     public void onCreate() {
         super.onCreate();
         Log.i(TAG, "Service created");
+        
         synchronized (sSyncAdapterLock) {
             if (sSyncAdapter == null) {
                 sSyncAdapter = new SyncAdapter(getApplicationContext(), true);
