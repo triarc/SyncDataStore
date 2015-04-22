@@ -118,8 +118,6 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	public static final int DELETED = 2;
 	public static final int ADDED = 3;
 
-	
-
 	private AccountManager mAccountManager;
 
 	private SyncResult syncResult;
@@ -219,7 +217,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	}
 
 	private void syncTypeCollection(SyncTypeCollection typeCollection) {
-		Log.i(TAG, "Beginning network synchronization for collection: " + typeCollection);
+		Log.i(TAG, "Beginning network synchronization for collection: "
+				+ typeCollection);
 		try {
 			String password = mAccountManager.getPassword(GenericAccountService
 					.GetAccount());
@@ -285,7 +284,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			sendLogs();
 			return;
 		}
-		Log.i(TAG, "Network synchronization complete for collection: " + typeCollection.getName());
+		Log.i(TAG, "Network synchronization complete for collection: "
+				+ typeCollection.getName());
 	}
 
 	private void logResponse(HttpResponse response) throws IOException {
@@ -314,30 +314,20 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				.getJSONObject("changeSetPerType");
 		HashMap<SyncType, JSONObject> notifyMap = new HashMap<SyncType, JSONObject>();
 
-		boolean isLockAquired = false;
-		try {
-			// first save all
-			for (SyncType syncType : typeCollection.getTypes()) {
-				syncResult.madeSomeProgress();
-				String name = syncType.getName();
+		// first save all
+		for (SyncType syncType : typeCollection.getTypes()) {
+			syncResult.madeSomeProgress();
+			String name = syncType.getName();
 
-				if (syncChangeSets.has(name)) {
-					JSONObject changeSetObject = syncChangeSets
-							.getJSONObject(name);
-					if (hasTypeChanges(changeSetObject) && !isLockAquired){
-						this.aquireLock(typeCollection, LockType.write);
-						isLockAquired = true;		
-					}
-					updateLocalTypeData(changeSetObject, syncType, typeCollection, syncResult);
-					notifyMap.put(syncType, changeSetObject);
-				} else {
-					Log.w(TAG, "Server does not support syncing of " + name);
-					sendLogs();
-				}
+			if (syncChangeSets.has(name)) {
+				JSONObject changeSetObject = syncChangeSets.getJSONObject(name);
+				updateLocalTypeData(changeSetObject, syncType, typeCollection,
+						syncResult);
+				notifyMap.put(syncType, changeSetObject);
+			} else {
+				Log.w(TAG, "Server does not support syncing of " + name);
+				sendLogs();
 			}
-		} finally {
-			if (isLockAquired)
-				this.releaseLock(typeCollection, LockType.write);
 		}
 
 		// store collection update timestamp
@@ -351,8 +341,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			jsChangeSet.put("deleted", cs.getJSONArray("deleted"));
 			JSONArray newJsArray = new JSONArray();
 			JSONArray jsonArray = cs.getJSONArray("updated");
-			for(int index = 0; index < jsonArray.length(); index++){
-				newJsArray.put(jsonArray.getJSONObject(index).getJSONObject("entity"));
+			for (int index = 0; index < jsonArray.length(); index++) {
+				newJsArray.put(jsonArray.getJSONObject(index).getJSONObject(
+						"entity"));
 			}
 			jsChangeSet.put("updated", newJsArray);
 			notifyWebApp(jsChangeSet.toString(), entry.getKey());
@@ -374,7 +365,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		request = httppost;
 
 		JSONObject entity;
-		this.aquireLock(typeCollection, LockType.read);
+		
 		try {
 			entity = this.getVersionSets(typeCollection, hasChanges);
 		} finally {
@@ -383,11 +374,6 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				// server
 				hasChanges.setValue(true);
 				this.lockUi(typeCollection);
-			}
-			try {
-				this.releaseLock(typeCollection, LockType.read);
-			} catch (Exception e) {
-				Log.e(TAG, "Error on this level should never happen");
 			}
 		}
 
@@ -479,7 +465,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return containerObject;
 	}
 
-	private JSONObject getVersions(SyncType type, SyncTypeCollection collection, MutableBoolean hasUpdates) {
+	private JSONObject getVersions(SyncType type,
+			SyncTypeCollection collection, MutableBoolean hasUpdates) {
 		JSONObject changeSet = new JSONObject();
 		JSONArray entityVersions = new JSONArray();
 		SQLiteDatabase openDatabase = null;
@@ -489,8 +476,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			openDatabase = openDatabase(collection);
 
 			query = openDatabase.query(type.getName(), new String[] { "_id",
-					"_timestamp", "__internalTimestamp", "__state" }, null, null, null, null,
-					"__internalTimestamp ASC");
+					"_timestamp", "__internalTimestamp", "__state" }, null,
+					null, null, null, "__internalTimestamp ASC");
 			while (query.moveToNext()) {
 				syncResult.stats.numEntries++;
 				JSONObject jsonObject = new JSONObject();
@@ -523,18 +510,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		}
 		return changeSet;
 	}
-	private void closeDb(String name){
-        SQLiteAccess.getInstance(this.getContext()).releaseDb(name);
-	}
-	private void aquireLock(SyncTypeCollection collection, LockType lockType)
-			throws IOException {
-		InterprocessLock.lock(this.getContext(), collection.getName(),
-				LOCK_SOURCE_NAME, lockType);
-	}
 
-	private void releaseLock(SyncTypeCollection collection, LockType lockType) {
-		InterprocessLock.release(this.getContext(), collection.getName(), LOCK_SOURCE_NAME,
-				lockType);
+	private void closeDb(String name) {
+		SQLiteAccess.getInstance(this.getContext()).releaseDb(name);
 	}
 
 	private void appendEntity(SyncType type, SQLiteDatabase openDatabase,
@@ -602,9 +580,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		}
 	}
 
-	private SQLiteDatabase openDatabase(SyncTypeCollection collection) throws Exception {
+	private SQLiteDatabase openDatabase(SyncTypeCollection collection)
+			throws Exception {
 		try {
-			SQLiteDatabase db = SQLiteAccess.getInstance(this.getContext()).requestDb(collection.getName());
+			SQLiteDatabase db = SQLiteAccess.getInstance(this.getContext())
+					.requestDb(collection.getName());
 			return db;
 		} catch (SQLiteException e) {
 			e.printStackTrace();
@@ -643,14 +623,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return false;
 	}
 
-	private boolean hasTypeChanges(JSONObject changeSet) throws JSONException{
+	private boolean hasTypeChanges(JSONObject changeSet) throws JSONException {
 		boolean hasAdded = hasArrayValues("added", changeSet);
 		boolean hasUpdated = hasArrayValues("updated", changeSet);
 		boolean hasDeleted = hasArrayValues("deleted", changeSet);
 		return hasAdded || hasUpdated || hasDeleted;
 	}
-	public void updateLocalTypeData(JSONObject changeSet, SyncType type, SyncTypeCollection collection,
-			final SyncResult syncResult) throws Exception {
+
+	public void updateLocalTypeData(JSONObject changeSet, SyncType type,
+			SyncTypeCollection collection, final SyncResult syncResult)
+			throws Exception {
 		if (!hasTypeChanges(changeSet)) {
 			Log.d(TAG, "No updates for type:" + type.getName());
 			return;
