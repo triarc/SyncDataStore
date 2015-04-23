@@ -650,12 +650,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			if (hasArrayValues("updated", changeSet)) {
 				JSONArray updated = changeSet.getJSONArray("updated");
 				for (int index = 0; index < updated.length(); index++) {
-					JSONObject updateSet = updated.getJSONObject(index);
-					int localEntityId = updateSet.getInt("id");
-					JSONObject entity = updateSet.getJSONObject("entity");
-					if (localEntityId != entity.getInt("id")) {
-						this.deleteRow(db, localEntityId, type);
-					}
+					JSONObject entity = updated.getJSONObject(index);
 					this.addOrUpdate(db, entity, type);
 				}
 			}
