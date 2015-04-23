@@ -80,8 +80,6 @@ import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
-import com.triarc.InterprocessLock;
-import com.triarc.LockType;
 import com.triarc.sync.accounts.GenericAccountService;
 
 /**
@@ -465,6 +463,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return containerObject;
 	}
 
+	@SuppressLint("NewApi")
 	private JSONObject getVersions(SyncType type,
 			SyncTypeCollection collection, MutableBoolean hasUpdates) {
 		JSONObject changeSet = new JSONObject();
@@ -482,7 +481,10 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				syncResult.stats.numEntries++;
 				JSONObject jsonObject = new JSONObject();
 
-				int id = query.getInt(0);
+				int fieldType = query.getType(0);
+				String id =  query.getString(0);
+				String queryId = this.getQueryId(fieldType, id);
+				
 				jsonObject.put("id", id);
 				jsonObject.put("timestamp", query.getLong(1));
 				jsonObject.put("clientTimestamp", query.getLong(2));
@@ -491,7 +493,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 					hasUpdates.setValue(true);
 				}
 				if (state == ADDED || state == UPDATED) {
-					appendEntity(type, openDatabase, jsonObject, id);
+					appendEntity(type, openDatabase, jsonObject, queryId);
 				}
 				jsonObject.put("state", state);
 				entityVersions.put(jsonObject);
@@ -511,12 +513,21 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return changeSet;
 	}
 
+	private String getQueryId(int fieldType, String id) {
+		if (Cursor.FIELD_TYPE_INTEGER == fieldType)
+			return id;
+		if (Cursor.FIELD_TYPE_STRING == fieldType)
+			return "'" + id + "'";
+		// TODO Auto-generated method stub
+		return null;
+	}
+
 	private void closeDb(String name) {
 		SQLiteAccess.getInstance(this.getContext()).releaseDb(name);
 	}
 
 	private void appendEntity(SyncType type, SQLiteDatabase openDatabase,
-			JSONObject jsonObject, int id) {
+			JSONObject jsonObject, String id) {
 		Cursor fullEntityCursor = null;
 		try {
 			fullEntityCursor = openDatabase.query(type.getName(), null, "_id="
@@ -532,6 +543,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 					e.printStackTrace();
 					sendLogs();
 				}
+			} else {
+				Log.w(TAG, "should not happen, check appendEntity");
 			}
 		} finally {
 			if (fullEntityCursor != null)
@@ -657,7 +670,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			if (hasArrayValues("deleted", changeSet)) {
 				JSONArray deleted = changeSet.getJSONArray("deleted");
 				for (int index = 0; index < deleted.length(); index++) {
-					int id = deleted.getInt(index);
+					String id = deleted.getString(index);
 					this.deleteRow(db, id, type);
 				}
 			}
@@ -681,9 +694,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return gson;
 	}
 
-	private void deleteRow(SQLiteDatabase db, Integer id, SyncType type)
+	private void deleteRow(SQLiteDatabase db, String id, SyncType type)
 			throws IOException {
-		db.delete(type.getName(), "_id=" + id.toString(), null);
+		String queryId = id;
+		try{
+			Integer.parseInt(id);
+		} catch( Exception e){
+			queryId = "'" + id + "'";
+		}
+		
+		db.delete(type.getName(), "_id=" + queryId, null);
 	}
 
 	private void addOrUpdate(SQLiteDatabase db, JSONObject entity, SyncType type)
