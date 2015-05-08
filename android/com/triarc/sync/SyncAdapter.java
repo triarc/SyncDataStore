@@ -333,18 +333,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				.putLong(typeCollection.getName(), lastUpdate).commit();
 		// then notify all
 		for (Entry<SyncType, JSONObject> entry : notifyMap.entrySet()) {
-			JSONObject cs = entry.getValue();
-			JSONObject jsChangeSet = new JSONObject();
-			jsChangeSet.put("added", cs.getJSONArray("added"));
-			jsChangeSet.put("deleted", cs.getJSONArray("deleted"));
-			JSONArray newJsArray = new JSONArray();
-			JSONArray jsonArray = cs.getJSONArray("updated");
-			for (int index = 0; index < jsonArray.length(); index++) {
-				newJsArray.put(jsonArray.getJSONObject(index).getJSONObject(
-						"entity"));
-			}
-			jsChangeSet.put("updated", newJsArray);
-			notifyWebApp(jsChangeSet.toString(), entry.getKey());
+			notifyWebApp(entry.getValue().toString(), entry.getKey());
 		}
 	}
 
