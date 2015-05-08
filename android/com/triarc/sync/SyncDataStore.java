@@ -89,8 +89,8 @@ public class SyncDataStore extends CordovaPlugin {
 			@Override
 			public void onReceive(Context context, Intent intent) {
 				SyncDataStore.this.webView.evaluateJavascript(
-						"DispoClient.NotificationHub.injectSyncState('block', "
-								+ intent.getStringExtra("collection") + ")",
+						"DispoClient.NotificationHub.injectSyncState('block', '"
+								+ intent.getStringExtra("collection") + "')",
 						null);
 			}
 		};
