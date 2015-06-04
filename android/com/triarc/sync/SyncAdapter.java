@@ -352,7 +352,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		request = httppost;
 
 		JSONObject entity;
-		
+
 		try {
 			entity = this.getVersionSets(typeCollection, hasChanges);
 		} finally {
@@ -471,9 +471,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				JSONObject jsonObject = new JSONObject();
 
 				int fieldType = query.getType(0);
-				String id =  query.getString(0);
+				String id = query.getString(0);
 				String queryId = this.getQueryId(fieldType, id);
-				
+
 				jsonObject.put("id", id);
 				jsonObject.put("timestamp", query.getLong(1));
 				jsonObject.put("clientTimestamp", query.getLong(2));
@@ -686,12 +686,12 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	private void deleteRow(SQLiteDatabase db, String id, SyncType type)
 			throws IOException {
 		String queryId = id;
-		try{
+		try {
 			Integer.parseInt(id);
-		} catch( Exception e){
+		} catch (Exception e) {
 			queryId = "'" + id + "'";
 		}
-		
+
 		db.delete(type.getName(), "_id=" + queryId, null);
 	}
 
@@ -732,11 +732,19 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			values.put(dbFieldName, jsonArray.toString());
 			break;
 		case JsonObject:
-			JSONObject object = entity.getJSONObject(name);
-			values.put(dbFieldName, object.toString());
+			if (entity.isNull(name)) {
+				values.put(dbFieldName, (String) null);
+			} else {
+				JSONObject object = entity.getJSONObject(name);
+				values.put(dbFieldName, object.toString());
+			}
 			break;
 		case Text:
-			values.put(dbFieldName, entity.getString(name));
+			if (entity.isNull(name)) {
+				values.put(dbFieldName, (String) null);
+			} else {
+				values.put(dbFieldName, entity.getString(name));
+			}
 			break;
 		default:
 		}
