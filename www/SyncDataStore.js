@@ -20,6 +20,9 @@ function SyncDataStore() {
 	SyncDataStore.prototype.isSyncing = function(callback, error){
 		cordova.exec(callback, error, "SyncDataStore", "isSyncing", []);
 	};
+	SyncDataStore.prototype.listen = function(typeName, callback, error){
+		cordova.exec(callback, error, "SyncDataStore", "listen", [typeName]);
+	};
 };
 module.exports = new SyncDataStore();
 

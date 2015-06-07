@@ -18,32 +18,22 @@ package com.triarc.sync;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.net.SocketTimeoutException;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.Collection;
 import java.util.Date;
-import java.util.GregorianCalendar;
-import java.util.HashMap;
 import java.util.Iterator;
-import java.util.Map.Entry;
 import java.util.TimeZone;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
-import org.apache.http.client.HttpRequestRetryHandler;
 import org.apache.http.client.methods.HttpPost;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.entity.StringEntity;
@@ -52,8 +42,6 @@ import org.apache.http.params.BasicHttpParams;
 import org.apache.http.params.HttpConnectionParams;
 import org.apache.http.params.HttpParams;
 import org.apache.http.protocol.HTTP;
-import org.apache.http.protocol.HttpContext;
-import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -67,7 +55,6 @@ import android.content.ContentProviderClient;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SyncContext;
 import android.content.SyncResult;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
@@ -80,6 +67,10 @@ import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonStreamParser;
+import com.google.gson.stream.JsonReader;
 import com.triarc.sync.accounts.GenericAccountService;
 
 /**
@@ -94,6 +85,7 @@ import com.triarc.sync.accounts.GenericAccountService;
  * The system calls onPerformSync() via an RPC call through the IBinder object
  * supplied by SyncService.
  */
+@SuppressLint("NewApi")
 public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	public static final String LOCK_SOURCE_NAME = "SyncDataStore";
 
@@ -286,6 +278,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				+ typeCollection.getName());
 	}
 
+	private void notifyWebApp() {
+		try {
+			Intent intent = new Intent(UPDATES_RECEIVED);
+			this.getContext().sendBroadcast(intent);
+		} catch (Exception e) {
+			syncResult.stats.numIoExceptions++;
+			e.printStackTrace();
+			sendLogs();
+		}
+	}
+
 	private void logResponse(HttpResponse response) throws IOException {
 		ByteArrayOutputStream outstream = new ByteArrayOutputStream();
 		response.getEntity().writeTo(outstream);
@@ -293,6 +296,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		Log.e(TAG, "Sync failed:" + responseBody);
 	}
 
+	public static ConcurrentHashMap<SyncType, String> notificationMap = new ConcurrentHashMap<SyncType, String>();
+
+	@SuppressLint("NewApi")
 	private void readResponse(SyncTypeCollection typeCollection,
 			InputStream inputStream, HttpResponse response)
 			throws UnsupportedEncodingException, IOException, JSONException,
@@ -307,34 +313,62 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		// json is UTF-8 by default
 		BufferedReader reader = new BufferedReader(new InputStreamReader(
 				inputStream, "UTF-8"), 8);
-		String json = getStringForReader(reader);
-		JSONObject syncChangeSets = new JSONObject(json)
-				.getJSONObject("changeSetPerType");
-		HashMap<SyncType, JSONObject> notifyMap = new HashMap<SyncType, JSONObject>();
-
-		// first save all
-		for (SyncType syncType : typeCollection.getTypes()) {
-			syncResult.madeSomeProgress();
-			String name = syncType.getName();
-
-			if (syncChangeSets.has(name)) {
-				JSONObject changeSetObject = syncChangeSets.getJSONObject(name);
-				updateLocalTypeData(changeSetObject, syncType, typeCollection,
+		 JsonStreamParser parser = new JsonStreamParser(reader);
+		 JsonReader jsonReader = new JsonReader(reader);
+		 jsonReader.beginObject();
+		 jsonReader.nextName();
+		 jsonReader.beginObject();
+		 while(jsonReader.hasNext()){
+			 
+			 String syncName = jsonReader.nextName();
+			 SyncType syncType = this.GetSyncType(typeCollection, syncName);
+			 
+			 JsonElement fromJson = new Gson().fromJson(jsonReader, JsonElement.class);
+			 updateLocalTypeData(fromJson.getAsJsonObject(), syncType, typeCollection,
 						syncResult);
-				notifyMap.put(syncType, changeSetObject);
-			} else {
-				Log.w(TAG, "Server does not support syncing of " + name);
-				sendLogs();
-			}
-		}
+			 notificationMap.put(syncType, fromJson.toString());
+//			 String path = jsonReader.getPath();
+//			 String nextName = jsonReader.nextName();
+//			 jsonReader.endObject();
+		 }
+		 jsonReader.endObject();
+		 
+//		String json = getStringForReader(reader);
+//		
+//
+//		JSONObject syncChangeSets = new JSONObject(json)
+//				.getJSONObject("changeSetPerType");
+//
+//		// first save all
+//		for (SyncType syncType : typeCollection.getTypes()) {
+//			syncResult.madeSomeProgress();
+//			String name = syncType.getName();
+//
+//			if (syncChangeSets.has(name)) {
+//				JSONObject changeSetObject = syncChangeSets.getJSONObject(name);
+//				updateLocalTypeData(changeSetObject, syncType, typeCollection,
+//						syncResult);
+//				notificationMap.put(syncType, changeSetObject);
+//			} else {
+//				Log.w(TAG, "Server does not support syncing of " + name);
+//				sendLogs();
+//			}
+//		}
 
 		// store collection update timestamp
 		PreferenceManager.getDefaultSharedPreferences(this.getContext()).edit()
 				.putLong(typeCollection.getName(), lastUpdate).commit();
 		// then notify all
-		for (Entry<SyncType, JSONObject> entry : notifyMap.entrySet()) {
-			notifyWebApp(entry.getValue().toString(), entry.getKey());
+		notifyWebApp();
+
+	}
+
+	private SyncType GetSyncType(SyncTypeCollection typeCollection, String name) {
+		for (SyncType syncType : typeCollection.getTypes()) {
+			if (syncType.getName().equals(name))
+				return syncType;
 		}
+		return null;
 	}
 
 	private HttpRequestBase createRequest(SyncTypeCollection typeCollection,
@@ -352,7 +386,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		request = httppost;
 
 		JSONObject entity;
-		
+
 		try {
 			entity = this.getVersionSets(typeCollection, hasChanges);
 		} finally {
@@ -400,23 +434,6 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	private void notifySyncFinished() {
 		Intent intent = new Intent(SYNC_FINISHED);
 		this.getContext().sendBroadcast(intent);
-	}
-
-	private void notifyWebApp(String json, SyncType syncType) {
-		String method = syncType.getNotificationMethod();
-		if (method == null)
-			return;
-		try {
-			Intent intent = new Intent(UPDATES_RECEIVED);
-			intent.putExtra(PAYLOAD_NAME, json);
-			intent.putExtra(PAYLOAD_INJECT_METHOD,
-					syncType.getNotificationMethod());
-			this.getContext().sendBroadcast(intent);
-		} catch (Exception e) {
-			syncResult.stats.numIoExceptions++;
-			e.printStackTrace();
-			sendLogs();
-		}
 	}
 
 	private String getStringForReader(BufferedReader reader) throws IOException {
@@ -471,9 +488,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				JSONObject jsonObject = new JSONObject();
 
 				int fieldType = query.getType(0);
-				String id =  query.getString(0);
+				String id = query.getString(0);
 				String queryId = this.getQueryId(fieldType, id);
-				
+
 				jsonObject.put("id", id);
 				jsonObject.put("timestamp", query.getLong(1));
 				jsonObject.put("clientTimestamp", query.getLong(2));
@@ -617,49 +634,49 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return builder.toString();
 	}
 
-	private boolean hasArrayValues(String fieldName, JSONObject changeSet)
+	private boolean hasArrayValues(String fieldName, JsonObject changeSet)
 			throws JSONException {
 		if (changeSet.has(fieldName)) {
-			return changeSet.getJSONArray(fieldName).length() > 0;
+			return changeSet.get(fieldName).getAsJsonArray().size() > 0;
 		}
 		return false;
 	}
 
-	private boolean hasTypeChanges(JSONObject changeSet) throws JSONException {
+	private boolean hasTypeChanges(JsonObject changeSet) throws JSONException {
 		boolean hasAdded = hasArrayValues("added", changeSet);
 		boolean hasUpdated = hasArrayValues("updated", changeSet);
 		boolean hasDeleted = hasArrayValues("deleted", changeSet);
 		return hasAdded || hasUpdated || hasDeleted;
 	}
 
-	public void updateLocalTypeData(JSONObject changeSet, SyncType type,
+	public void updateLocalTypeData(JsonObject fromJson, SyncType type,
 			SyncTypeCollection collection, final SyncResult syncResult)
 			throws Exception {
-		if (!hasTypeChanges(changeSet)) {
+		if (!hasTypeChanges(fromJson)) {
 			Log.d(TAG, "No updates for type:" + type.getName());
 			return;
 		}
 
 		SQLiteDatabase db = openDatabase(collection);
 		try {
-			if (hasArrayValues("added", changeSet)) {
-				JSONArray added = changeSet.getJSONArray("added");
-				for (int index = 0; index < added.length(); index++) {
-					JSONObject entity = added.getJSONObject(index);
+			if (hasArrayValues("added", fromJson)) {
+				JsonArray added = fromJson.get("added").getAsJsonArray();
+				for (int index = 0; index < added.size(); index++) {
+					JsonObject entity = added.get(index).getAsJsonObject();
 					this.addOrUpdate(db, entity, type);
 				}
 			}
-			if (hasArrayValues("updated", changeSet)) {
-				JSONArray updated = changeSet.getJSONArray("updated");
-				for (int index = 0; index < updated.length(); index++) {
-					JSONObject entity = updated.getJSONObject(index);
+			if (hasArrayValues("updated", fromJson)) {
+				JsonArray updated = fromJson.get("updated").getAsJsonArray();
+				for (int index = 0; index < updated.size(); index++) {
+					JsonObject entity = updated.get(index).getAsJsonObject();
 					this.addOrUpdate(db, entity, type);
 				}
 			}
-			if (hasArrayValues("deleted", changeSet)) {
-				JSONArray deleted = changeSet.getJSONArray("deleted");
-				for (int index = 0; index < deleted.length(); index++) {
-					String id = deleted.getString(index);
+			if (hasArrayValues("deleted", fromJson)) {
+				JsonArray deleted = fromJson.get("deleted").getAsJsonArray();
+				for (int index = 0; index < deleted.size(); index++) {
+					String id = deleted.get(index).getAsString();
 					this.deleteRow(db, id, type);
 				}
 			}
@@ -686,16 +703,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	private void deleteRow(SQLiteDatabase db, String id, SyncType type)
 			throws IOException {
 		String queryId = id;
-		try{
+		try {
 			Integer.parseInt(id);
-		} catch( Exception e){
+		} catch (Exception e) {
 			queryId = "'" + id + "'";
 		}
-		
+
 		db.delete(type.getName(), "_id=" + queryId, null);
 	}
 
-	private void addOrUpdate(SQLiteDatabase db, JSONObject entity, SyncType type)
+	private void addOrUpdate(SQLiteDatabase db, JsonObject entity, SyncType type)
 			throws JSONException, ParseException, IOException {
 		ContentValues contentValues = new ContentValues();
 		for (SyncField syncField : type.getFields()) {
@@ -703,40 +720,40 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		}
 		contentValues.put("__state", UNCHANGED);
 
-		contentValues.put("__internalTimestamp", entity.getLong("timestamp"));
+		contentValues.put("__internalTimestamp", entity.get("timestamp").getAsLong());
 		String localTableName = type.getName();
 		db.replaceOrThrow(localTableName, null, contentValues);
 	}
 
-	private void addContentValueFor(ContentValues values, JSONObject entity,
+	private void addContentValueFor(ContentValues values, JsonObject entity,
 			SyncField syncField) throws JSONException, ParseException {
 		String name = syncField.getName();
 		String dbFieldName = FIELD_PREFIX + name;
-		if (!entity.has(name) || entity.isNull(name)) {
+		if (!entity.has(name) || entity.get(name).isJsonNull()) {
 			values.putNull(dbFieldName);
 			return;
 		}
 		switch (syncField.getFieldType()) {
 		case Boolean:
-			values.put(dbFieldName, entity.getBoolean(name));
+			values.put(dbFieldName, entity.get(name).getAsBoolean());
 			break;
 		case Date:
-			Date date = format.parse(entity.getString(name));
+			Date date = format.parse(entity.get(name).getAsString());
 			values.put(dbFieldName, date.getTime());
 			break;
 		case Numeric:
-			values.put(dbFieldName, entity.getLong(name));
+			values.put(dbFieldName, entity.get(name).getAsLong());
 			break;
 		case JsonArray:
-			JSONArray jsonArray = entity.getJSONArray(name);
+			JsonArray jsonArray = entity.get(name).getAsJsonArray();
 			values.put(dbFieldName, jsonArray.toString());
 			break;
 		case JsonObject:
-			JSONObject object = entity.getJSONObject(name);
+			JsonObject object = entity.get(name).getAsJsonObject();
 			values.put(dbFieldName, object.toString());
 			break;
 		case Text:
-			values.put(dbFieldName, entity.getString(name));
+			values.put(dbFieldName, entity.get(name).getAsString());
 			break;
 		default:
 		}

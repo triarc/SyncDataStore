@@ -1,10 +1,14 @@
 package com.triarc.sync;
 
 import java.io.File;
+import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaWebView;
+import org.apache.cordova.PluginResult;
+import org.apache.cordova.PluginResult.Status;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -20,6 +24,7 @@ import android.content.SyncStatusObserver;
 import android.os.AsyncTask;
 import android.preference.PreferenceManager;
 import android.util.Log;
+import android.webkit.ValueCallback;
 
 /**
  * This class echoes a string called from JavaScript.
@@ -44,7 +49,23 @@ public class SyncDataStore extends CordovaPlugin {
 		webView.getContext().registerReceiver(syncUnblockReceiver,
 				new IntentFilter(SyncAdapter.SYNC_UNBLOCK));
 	}
-
+	@SuppressLint("NewApi")
+	private void notifyWebApp(String json, SyncType syncType) {
+		
+		String method = syncType.getNotificationMethod();
+		if (method == null)
+			return;
+		try {
+			CallbackContext callbackContext = _updateListeners.get(syncType.getName());
+			if (callbackContext == null)
+				return;
+			PluginResult result = new PluginResult(Status.OK, json);
+			result.setKeepCallback(true);
+			callbackContext.sendPluginResult(result);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
 	@Override
 	protected void pluginInitialize() {
 		// TODO Auto-generated method stub
@@ -55,12 +76,10 @@ public class SyncDataStore extends CordovaPlugin {
 			@SuppressLint("NewApi")
 			@Override
 			public void onReceive(Context context, Intent intent) {
-				String stringExtra = intent
-						.getStringExtra(SyncAdapter.PAYLOAD_NAME);
-				String methodName = intent
-						.getStringExtra(SyncAdapter.PAYLOAD_INJECT_METHOD);
-				SyncDataStore.this.webView.evaluateJavascript(methodName + "('"
-						+ stringExtra + "')", null);
+				// then notify all
+				for (Entry<SyncType, String> entry : SyncAdapter.notificationMap .entrySet()) {
+					notifyWebApp(entry.getValue(), entry.getKey());
+				}
 			}
 		};
 
@@ -154,6 +173,7 @@ public class SyncDataStore extends CordovaPlugin {
 		registerReceivers();
 	}
 
+	private ConcurrentHashMap<String, CallbackContext> _updateListeners = new ConcurrentHashMap<String, CallbackContext>();
 	@Override
 	public boolean execute(String action, JSONArray args,
 			CallbackContext callbackContext) throws JSONException {
@@ -183,11 +203,18 @@ public class SyncDataStore extends CordovaPlugin {
 			;
 		} else if (action.equals("isSyncing")) {
 			callbackContext.success(new Boolean(isSyncing()).toString());
+		} else if (action.equals("listen")){
+			String typeName = args.getString(0);
+			PluginResult pluginResult = new PluginResult(Status.NO_RESULT);
+			pluginResult.setKeepCallback(true);
+			callbackContext.sendPluginResult(pluginResult);
+			this._updateListeners.put(typeName, callbackContext);
 		}
 
 		return true;
 	}
 
+	@SuppressLint("NewApi")
 	private boolean isSyncing() {
 		ContentResolver contentResolver = this.webView.getContext()
 				.getContentResolver();
