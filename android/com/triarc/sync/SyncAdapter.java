@@ -184,12 +184,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		new AsyncTask<Void, Void, Boolean>() {
 			@Override
 			protected Boolean doInBackground(Void... params) {
+				try{
 				mLogCollector.collect();
 				String path = SyncUtils.GetWebApiPath(SyncAdapter.this
 						.getContext());
 				if (path == null)
 					return true;
 				mLogCollector.sendLog(path);
+				} catch(Exception e){
+					e.printStackTrace();
+				}
 				return true;
 			}
 
