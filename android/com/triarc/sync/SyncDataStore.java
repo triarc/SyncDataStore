@@ -132,6 +132,8 @@ public class SyncDataStore extends CordovaPlugin {
 		webView.getContext().unregisterReceiver(this.stopSyncReceiver);
 		webView.getContext().unregisterReceiver(this.startSyncReceiver);
 		webView.getContext().unregisterReceiver(this.changeSetReceivedReceiver);
+		webView.getContext().unregisterReceiver(this.syncUnblockReceiver);
+		webView.getContext().unregisterReceiver(this.syncBlockReceiver);
 	}
 
 	private void getLatestUpdate(final String collectionName,
