@@ -108,6 +108,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	public static final int DELETED = 2;
 	public static final int ADDED = 3;
 
+	static final String SYNC_TYPE = "SyncType";
+
 	private AccountManager mAccountManager;
 
 	private SyncResult syncResult;
@@ -157,15 +159,18 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			ContentProviderClient provider, SyncResult syncResult) {
 		Date start = new Date();
 		try {
-			try {
-				this.syncResult = syncResult;
-				this.notifySyncStart();
-				for (SyncTypeCollection type : getSyncCollections(this
-						.getContext())) {
+
+			this.syncResult = syncResult;
+
+			for (SyncTypeCollection type : getSyncCollections(this.getContext())) {
+
+				this.notifySyncStart(type);
+				try {
 					syncTypeCollection(type);
+				} catch (Exception e) {
+
 				}
-			} finally {
-				this.notifySyncFinished();
+				this.notifySyncFinished(type);
 			}
 
 		} catch (Exception e) {
@@ -184,14 +189,14 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		new AsyncTask<Void, Void, Boolean>() {
 			@Override
 			protected Boolean doInBackground(Void... params) {
-				try{
-				mLogCollector.collect();
-				String path = SyncUtils.GetWebApiPath(SyncAdapter.this
-						.getContext());
-				if (path == null)
-					return true;
-				mLogCollector.sendLog(path);
-				} catch(Exception e){
+				try {
+					mLogCollector.collect();
+					String path = SyncUtils.GetWebApiPath(SyncAdapter.this
+							.getContext());
+					if (path == null)
+						return true;
+					mLogCollector.sendLog(path);
+				} catch (Exception e) {
 					e.printStackTrace();
 				}
 				return true;
@@ -317,47 +322,48 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		// json is UTF-8 by default
 		BufferedReader reader = new BufferedReader(new InputStreamReader(
 				inputStream, "UTF-8"), 8);
-		 JsonStreamParser parser = new JsonStreamParser(reader);
-		 JsonReader jsonReader = new JsonReader(reader);
-		 jsonReader.beginObject();
-		 jsonReader.nextName();
-		 jsonReader.beginObject();
-		 while(jsonReader.hasNext()){
-			 
-			 String syncName = jsonReader.nextName();
-			 SyncType syncType = this.GetSyncType(typeCollection, syncName);
-			 
-			 JsonElement fromJson = new Gson().fromJson(jsonReader, JsonElement.class);
-			 updateLocalTypeData(fromJson.getAsJsonObject(), syncType, typeCollection,
-						syncResult);
-			 notificationMap.put(syncType, fromJson.toString());
-//			 String path = jsonReader.getPath();
-//			 String nextName = jsonReader.nextName();
-//			 jsonReader.endObject();
-		 }
-		 jsonReader.endObject();
-		 
-//		String json = getStringForReader(reader);
-//		
-//
-//		JSONObject syncChangeSets = new JSONObject(json)
-//				.getJSONObject("changeSetPerType");
-//
-//		// first save all
-//		for (SyncType syncType : typeCollection.getTypes()) {
-//			syncResult.madeSomeProgress();
-//			String name = syncType.getName();
-//
-//			if (syncChangeSets.has(name)) {
-//				JSONObject changeSetObject = syncChangeSets.getJSONObject(name);
-//				updateLocalTypeData(changeSetObject, syncType, typeCollection,
-//						syncResult);
-//				notificationMap.put(syncType, changeSetObject);
-//			} else {
-//				Log.w(TAG, "Server does not support syncing of " + name);
-//				sendLogs();
-//			}
-//		}
+		JsonStreamParser parser = new JsonStreamParser(reader);
+		JsonReader jsonReader = new JsonReader(reader);
+		jsonReader.beginObject();
+		jsonReader.nextName();
+		jsonReader.beginObject();
+		while (jsonReader.hasNext()) {
+
+			String syncName = jsonReader.nextName();
+			SyncType syncType = this.GetSyncType(typeCollection, syncName);
+
+			JsonElement fromJson = new Gson().fromJson(jsonReader,
+					JsonElement.class);
+			updateLocalTypeData(fromJson.getAsJsonObject(), syncType,
+					typeCollection, syncResult);
+			notificationMap.put(syncType, fromJson.toString());
+			// String path = jsonReader.getPath();
+			// String nextName = jsonReader.nextName();
+			// jsonReader.endObject();
+		}
+		jsonReader.endObject();
+
+		// String json = getStringForReader(reader);
+		//
+		//
+		// JSONObject syncChangeSets = new JSONObject(json)
+		// .getJSONObject("changeSetPerType");
+		//
+		// // first save all
+		// for (SyncType syncType : typeCollection.getTypes()) {
+		// syncResult.madeSomeProgress();
+		// String name = syncType.getName();
+		//
+		// if (syncChangeSets.has(name)) {
+		// JSONObject changeSetObject = syncChangeSets.getJSONObject(name);
+		// updateLocalTypeData(changeSetObject, syncType, typeCollection,
+		// syncResult);
+		// notificationMap.put(syncType, changeSetObject);
+		// } else {
+		// Log.w(TAG, "Server does not support syncing of " + name);
+		// sendLogs();
+		// }
+		// }
 
 		// store collection update timestamp
 		PreferenceManager.getDefaultSharedPreferences(this.getContext()).edit()
@@ -430,13 +436,15 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		return httpclient;
 	}
 
-	private void notifySyncStart() {
+	private void notifySyncStart(SyncTypeCollection type) {
 		Intent intent = new Intent(SYNC_START);
+		intent.putExtra(SYNC_TYPE, type.getName());
 		this.getContext().sendBroadcast(intent);
 	}
 
-	private void notifySyncFinished() {
+	private void notifySyncFinished(SyncTypeCollection type) {
 		Intent intent = new Intent(SYNC_FINISHED);
+		intent.putExtra(SYNC_TYPE, type.getName());
 		this.getContext().sendBroadcast(intent);
 	}
 
@@ -724,7 +732,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		}
 		contentValues.put("__state", UNCHANGED);
 
-		contentValues.put("__internalTimestamp", entity.get("timestamp").getAsLong());
+		contentValues.put("__internalTimestamp", entity.get("timestamp")
+				.getAsLong());
 		String localTableName = type.getName();
 		db.replaceOrThrow(localTableName, null, contentValues);
 	}
