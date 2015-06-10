@@ -110,6 +110,8 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 	static final String SYNC_TYPE = "SyncType";
 
+	public static final String SYNC_ERROR = "SyncError";
+
 	private AccountManager mAccountManager;
 
 	private SyncResult syncResult;
@@ -168,7 +170,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				try {
 					syncTypeCollection(type);
 				} catch (Exception e) {
-
+					this.notifySyncError(e, type);
 				}
 				this.notifySyncFinished(type);
 			}
@@ -181,6 +183,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			Log.d(TAG, "Sync finished in " + duration + "ms");
 		}
 
+	}
+
+	private void notifySyncError(Exception e, SyncTypeCollection syncType) {
+		Intent intent = new Intent(SYNC_ERROR);
+		intent.putExtra(SYNC_ERROR, e.toString());
+		intent.putExtra(SYNC_TYPE, syncType.getName());
+		this.getContext().sendBroadcast(intent);
 	}
 
 	private void sendLogs() {
@@ -218,6 +227,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 	private void syncTypeCollection(SyncTypeCollection typeCollection) {
 		Log.i(TAG, "Beginning network synchronization for collection: "
 				+ typeCollection);
+		DefaultHttpClient httpclient = createHttpClient();
+		HttpRequestBase request;
+		MutableBoolean hasChanges;
 		try {
 			String password = mAccountManager.getPassword(GenericAccountService
 					.GetAccount());
@@ -231,58 +243,59 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 				return;
 			}
 
-			DefaultHttpClient httpclient = createHttpClient();
+			
+			hasChanges = new MutableBoolean();
 
-			MutableBoolean hasChanges = new MutableBoolean();
-			HttpRequestBase request = createRequest(typeCollection, password,
-					path, hasChanges);
-
-			InputStream inputStream = null;
-			String result = null;
-			try {
-				HttpResponse response = httpclient.execute(request);
-				int statusCode = response.getStatusLine().getStatusCode();
-				if (statusCode >= 200 && statusCode < 300) {
-					HttpEntity httpEntity = response.getEntity();
-					inputStream = httpEntity.getContent();
-
-					readResponse(typeCollection, inputStream, response);
-				} else {
-					if (statusCode == 401) {
-						Log.w(TAG,
-								"Not authenticated, remove this password and remove account");
-						sendLogs();
-						// SyncUtils.DeleteAccount(this.getContext());
-					} else {
-						logResponse(response);
-					}
-					syncResult.partialSyncUnavailable = true;
-				}
-			} catch (SocketTimeoutException e) {
-				e.printStackTrace();
-				sendLogs();
-			} catch (Exception e) {
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-				sendLogs();
-			} finally {
-				try {
-					if (hasChanges.getValue()) {
-						this.unlockUi(typeCollection);
-					}
-					if (inputStream != null)
-						inputStream.close();
-				} catch (Exception squish) {
-					squish.printStackTrace();
-					sendLogs();
-				}
-			}
+			request = createRequest(typeCollection, password, path, hasChanges);
 		} catch (Exception e) {
-			Log.e(TAG, "Error reading from network: " + e.toString());
+			Log.e(TAG, "Error creating request: " + e.toString());
 			syncResult.stats.numIoExceptions++;
 			sendLogs();
+			notifySyncError(e, typeCollection);
 			return;
 		}
+		InputStream inputStream = null;
+		String result = null;
+		try {
+			HttpResponse response = httpclient.execute(request);
+			int statusCode = response.getStatusLine().getStatusCode();
+			if (statusCode >= 200 && statusCode < 300) {
+				HttpEntity httpEntity = response.getEntity();
+				inputStream = httpEntity.getContent();
+
+				readResponse(typeCollection, inputStream, response);
+			} else {
+				if (statusCode == 401) {
+					Log.w(TAG,
+							"Not authenticated, remove this password and remove account");
+					sendLogs();
+					// SyncUtils.DeleteAccount(this.getContext());
+				} else {
+					logResponse(response);
+				}
+				syncResult.partialSyncUnavailable = true;
+			}
+		} catch (SocketTimeoutException e) {
+			e.printStackTrace();
+			sendLogs();
+			// swallow
+		} catch (Exception e) {
+			e.printStackTrace();
+			sendLogs();
+			notifySyncError(e, typeCollection);
+		} finally {
+			try {
+				if (hasChanges.getValue()) {
+					this.unlockUi(typeCollection);
+				}
+				if (inputStream != null)
+					inputStream.close();
+			} catch (Exception squish) {
+				squish.printStackTrace();
+				sendLogs();
+			}
+		}
+
 		Log.i(TAG, "Network synchronization complete for collection: "
 				+ typeCollection.getName());
 	}

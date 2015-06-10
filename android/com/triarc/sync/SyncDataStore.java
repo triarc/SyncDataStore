@@ -36,6 +36,8 @@ public class SyncDataStore extends CordovaPlugin {
 	private BroadcastReceiver stopSyncReceiver;
 	private BroadcastReceiver syncBlockReceiver;
 	private BroadcastReceiver syncUnblockReceiver;
+	private BroadcastReceiver syncErrorReceiver;
+	private ConcurrentHashMap<String, CallbackContext> _errorListeners = new ConcurrentHashMap<String, CallbackContext>();
 
 	protected void registerReceivers() {
 		webView.getContext().registerReceiver(changeSetReceivedReceiver,
@@ -44,6 +46,8 @@ public class SyncDataStore extends CordovaPlugin {
 				new IntentFilter(SyncAdapter.SYNC_START));
 		webView.getContext().registerReceiver(stopSyncReceiver,
 				new IntentFilter(SyncAdapter.SYNC_FINISHED));
+		webView.getContext().registerReceiver(syncErrorReceiver,
+				new IntentFilter(SyncAdapter.SYNC_ERROR));
 		webView.getContext().registerReceiver(syncBlockReceiver,
 				new IntentFilter(SyncAdapter.SYNC_BLOCK));
 		webView.getContext().registerReceiver(syncUnblockReceiver,
@@ -86,7 +90,18 @@ public class SyncDataStore extends CordovaPlugin {
 				}
 			}
 		};
+		this.syncErrorReceiver = new BroadcastReceiver() {
+			@SuppressLint("NewApi")
+			@Override
+			public void onReceive(Context context, Intent intent) {
+				String errorMessage = intent
+						.getStringExtra(SyncAdapter.SYNC_ERROR);
+				String collectionName = intent.getStringExtra(SyncAdapter.SYNC_TYPE);
+				SyncDataStore.this.notifySyncError(errorMessage, collectionName);
+			}
 
+			
+		};
 		this.startSyncReceiver = new BroadcastReceiver() {
 			@SuppressLint("NewApi")
 			@Override
@@ -130,6 +145,20 @@ public class SyncDataStore extends CordovaPlugin {
 		registerReceivers();
 	}
 
+	protected void notifySyncError(String errorMessage, String collectionName) {
+		try {
+			CallbackContext callbackContext = _errorListeners.get(collectionName);
+			if (callbackContext == null)
+				return;
+			PluginResult result = new PluginResult(Status.OK, errorMessage);
+			result.setKeepCallback(true);
+			callbackContext.sendPluginResult(result);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		
+	}
+
 	@Override
 	public void onPause(boolean multitasking) {
 		// TODO Auto-generated method stub
@@ -139,6 +168,7 @@ public class SyncDataStore extends CordovaPlugin {
 		webView.getContext().unregisterReceiver(this.changeSetReceivedReceiver);
 		webView.getContext().unregisterReceiver(this.syncUnblockReceiver);
 		webView.getContext().unregisterReceiver(this.syncBlockReceiver);
+		webView.getContext().unregisterReceiver(this.syncErrorReceiver);
 	}
 
 	private void getLatestUpdate(final String collectionName,
@@ -217,6 +247,12 @@ public class SyncDataStore extends CordovaPlugin {
 			pluginResult.setKeepCallback(true);
 			callbackContext.sendPluginResult(pluginResult);
 			this._updateListeners.put(typeName, callbackContext);
+		} else if (action.equals("onError")){
+			String collectionName = args.getString(0);
+			PluginResult pluginResult = new PluginResult(Status.NO_RESULT);
+			pluginResult.setKeepCallback(true);
+			callbackContext.sendPluginResult(pluginResult);
+			this._errorListeners.put(collectionName, callbackContext);
 		}
 
 		return true;
