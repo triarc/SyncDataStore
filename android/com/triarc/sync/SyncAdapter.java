@@ -30,6 +30,7 @@ import java.util.Date;
 import java.util.Iterator;
 import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
@@ -318,7 +319,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 		Log.e(TAG, "Sync failed:" + responseBody);
 	}
 
-	public static ConcurrentHashMap<SyncType, String> notificationMap = new ConcurrentHashMap<SyncType, String>();
+	public static ConcurrentLinkedQueue<SyncNotificationMessage> notificationQueue = new ConcurrentLinkedQueue<SyncNotificationMessage>();
 
 	@SuppressLint("NewApi")
 	private void readResponse(SyncTypeCollection typeCollection,
@@ -349,7 +350,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 					JsonElement.class);
 			updateLocalTypeData(fromJson.getAsJsonObject(), syncType,
 					typeCollection, syncResult);
-			notificationMap.put(syncType, fromJson.toString());
+			notificationQueue.add(new SyncNotificationMessage(syncType, fromJson.toString()));
 			// String path = jsonReader.getPath();
 			// String nextName = jsonReader.nextName();
 			// jsonReader.endObject();

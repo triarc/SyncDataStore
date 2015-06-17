@@ -3,6 +3,7 @@ package com.triarc.sync;
 import java.io.File;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -84,9 +85,12 @@ public class SyncDataStore extends CordovaPlugin {
 			@Override
 			public void onReceive(Context context, Intent intent) {
 				// then notify all
-				for (Entry<SyncType, String> entry : SyncAdapter.notificationMap
-						.entrySet()) {
-					notifyWebApp(entry.getValue(), entry.getKey());
+				SyncNotificationMessage poll = SyncAdapter.notificationQueue
+						.poll();
+				while (poll != null) {
+					notifyWebApp(poll.getJson(), poll.getSyncType());
+					poll = SyncAdapter.notificationQueue
+							.poll();
 				}
 			}
 		};
@@ -96,11 +100,12 @@ public class SyncDataStore extends CordovaPlugin {
 			public void onReceive(Context context, Intent intent) {
 				String errorMessage = intent
 						.getStringExtra(SyncAdapter.SYNC_ERROR);
-				String collectionName = intent.getStringExtra(SyncAdapter.SYNC_TYPE);
-				SyncDataStore.this.notifySyncError(errorMessage, collectionName);
+				String collectionName = intent
+						.getStringExtra(SyncAdapter.SYNC_TYPE);
+				SyncDataStore.this
+						.notifySyncError(errorMessage, collectionName);
 			}
 
-			
 		};
 		this.startSyncReceiver = new BroadcastReceiver() {
 			@SuppressLint("NewApi")
@@ -147,7 +152,8 @@ public class SyncDataStore extends CordovaPlugin {
 
 	protected void notifySyncError(String errorMessage, String collectionName) {
 		try {
-			CallbackContext callbackContext = _errorListeners.get(collectionName);
+			CallbackContext callbackContext = _errorListeners
+					.get(collectionName);
 			if (callbackContext == null)
 				return;
 			PluginResult result = new PluginResult(Status.OK, errorMessage);
@@ -156,7 +162,7 @@ public class SyncDataStore extends CordovaPlugin {
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
-		
+
 	}
 
 	@Override
@@ -247,7 +253,7 @@ public class SyncDataStore extends CordovaPlugin {
 			pluginResult.setKeepCallback(true);
 			callbackContext.sendPluginResult(pluginResult);
 			this._updateListeners.put(typeName, callbackContext);
-		} else if (action.equals("onError")){
+		} else if (action.equals("onError")) {
 			String collectionName = args.getString(0);
 			PluginResult pluginResult = new PluginResult(Status.NO_RESULT);
 			pluginResult.setKeepCallback(true);
