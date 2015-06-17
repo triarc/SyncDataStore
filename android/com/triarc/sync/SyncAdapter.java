@@ -70,6 +70,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonStreamParser;
 import com.google.gson.stream.JsonReader;
 import com.triarc.sync.accounts.GenericAccountService;
@@ -350,6 +351,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 					JsonElement.class);
 			updateLocalTypeData(fromJson.getAsJsonObject(), syncType,
 					typeCollection, syncResult);
+			
 			notificationQueue.add(new SyncNotificationMessage(syncType, fromJson.toString()));
 			// String path = jsonReader.getPath();
 			// String nextName = jsonReader.nextName();
@@ -702,8 +704,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 			if (hasArrayValues("deleted", fromJson)) {
 				JsonArray deleted = fromJson.get("deleted").getAsJsonArray();
 				for (int index = 0; index < deleted.size(); index++) {
-					String id = deleted.get(index).getAsString();
-					this.deleteRow(db, id, type);
+					JsonElement jsonElement = deleted.get(index);
+					String id = jsonElement.getAsString();
+					String queryId = id;
+					try {
+						int parseInt = Integer.parseInt(id);
+						jsonElement = new JsonPrimitive(parseInt);
+					} catch (Exception e) {
+						queryId = "'" + id + "'";
+					}
+					this.deleteRow(db, queryId, type);
+					deleted.set(index, jsonElement);
 				}
 			}
 		} finally {
@@ -728,14 +739,9 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 	private void deleteRow(SQLiteDatabase db, String id, SyncType type)
 			throws IOException {
-		String queryId = id;
-		try {
-			Integer.parseInt(id);
-		} catch (Exception e) {
-			queryId = "'" + id + "'";
-		}
+		
 
-		db.delete(type.getName(), "_id=" + queryId, null);
+		db.delete(type.getName(), "_id=" + id, null);
 	}
 
 	private void addOrUpdate(SQLiteDatabase db, JsonObject entity, SyncType type)
