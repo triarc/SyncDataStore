@@ -66,7 +66,23 @@
 		<source-file src="android/syncadapter.xml" target-dir="res/xml" />
 		<source-file src="android/authenticator.xml" target-dir="res/xml" />
 		
-		<source-file src="android/com/triarc/sync" target-dir="src/com/triarc/" />
+		
+    <source-file src="android/com/triarc/sync/DummyProvider.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/FieldType.java" target-dir="src/com/triarc/sync/" />
+
+    <source-file src="android/com/triarc/sync/LogCollector.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/MutableBoolean.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncAdapter.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncDataStore.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncField.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncKind.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncNotificationMessage.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncService.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncType.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncTypeCollection.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/SyncUtils.java" target-dir="src/com/triarc/sync/" />
+    <source-file src="android/com/triarc/sync/accounts/GenericAccountService.java" target-dir="src/com/triarc/sync/accounts/" />
+    
 		<source-file src="android/libs/gson-2.3.1.jar" target-dir="libs/" />
   </platform>
  

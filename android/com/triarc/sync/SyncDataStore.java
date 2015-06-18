@@ -1,6 +1,7 @@
 package com.triarc.sync;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -39,7 +40,7 @@ public class SyncDataStore extends CordovaPlugin {
 	private BroadcastReceiver syncUnblockReceiver;
 	private BroadcastReceiver syncErrorReceiver;
 	private ConcurrentHashMap<String, CallbackContext> _errorListeners = new ConcurrentHashMap<String, CallbackContext>();
-
+	private ArrayList<CallbackContext> _stateChangeListeners = new ArrayList<CallbackContext>();
 	protected void registerReceivers() {
 		webView.getContext().registerReceiver(changeSetReceivedReceiver,
 				new IntentFilter(SyncAdapter.UPDATES_RECEIVED));
@@ -112,9 +113,8 @@ public class SyncDataStore extends CordovaPlugin {
 			@Override
 			public void onReceive(Context context, Intent intent) {
 				String type = intent.getStringExtra(SyncAdapter.SYNC_TYPE);
-				SyncDataStore.this.webView.evaluateJavascript(
-						"DispoClient.NotificationHub.injectSyncState('started', '"
-								+ type + "')", null);
+				SyncDataStore.this.notifySyncStateChange("started", type);
+
 			}
 		};
 		this.stopSyncReceiver = new BroadcastReceiver() {
@@ -122,34 +122,43 @@ public class SyncDataStore extends CordovaPlugin {
 			@Override
 			public void onReceive(Context context, Intent intent) {
 				String type = intent.getStringExtra(SyncAdapter.SYNC_TYPE);
-				SyncDataStore.this.webView.evaluateJavascript(
-						"DispoClient.NotificationHub.injectSyncState('finished', '"
-								+ type + "')", null);
+				SyncDataStore.this.notifySyncStateChange("finished", type);
 			}
 		};
 		this.syncBlockReceiver = new BroadcastReceiver() {
 			@SuppressLint("NewApi")
 			@Override
 			public void onReceive(Context context, Intent intent) {
-				SyncDataStore.this.webView.evaluateJavascript(
-						"DispoClient.NotificationHub.injectSyncState('block', '"
-								+ intent.getStringExtra("collection") + "')",
-						null);
+				String type = intent.getStringExtra(SyncAdapter.SYNC_TYPE);
+				SyncDataStore.this.notifySyncStateChange("block", type);
 			}
 		};
 		this.syncUnblockReceiver = new BroadcastReceiver() {
 			@SuppressLint("NewApi")
 			@Override
 			public void onReceive(Context context, Intent intent) {
-				SyncDataStore.this.webView
-						.evaluateJavascript(
-								"DispoClient.NotificationHub.injectSyncState('unblock')",
-								null);
+				String type = intent.getStringExtra(SyncAdapter.SYNC_TYPE);
+				SyncDataStore.this.notifySyncStateChange("unblock", type);
 			}
 		};
 		registerReceivers();
 	}
+	protected void notifySyncStateChange(String state, String collectionName) {
+		try {
+			JSONObject jsonObject = new JSONObject();
+			jsonObject.put("state", state);
+			jsonObject.put("collectionName", collectionName);
 
+			PluginResult result = new PluginResult(Status.OK, jsonObject);
+			result.setKeepCallback(true);
+			for (CallbackContext context : this._stateChangeListeners) {
+				context.sendPluginResult(result);
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+
+	}
 	protected void notifySyncError(String errorMessage, String collectionName) {
 		try {
 			CallbackContext callbackContext = _errorListeners
@@ -259,6 +268,11 @@ public class SyncDataStore extends CordovaPlugin {
 			pluginResult.setKeepCallback(true);
 			callbackContext.sendPluginResult(pluginResult);
 			this._errorListeners.put(collectionName, callbackContext);
+		} else if (action.equals("onSyncStateChanged")) {
+			PluginResult pluginResult = new PluginResult(Status.NO_RESULT);
+			pluginResult.setKeepCallback(true);
+			callbackContext.sendPluginResult(pluginResult);
+			this._stateChangeListeners.add(callbackContext);
 		}
 
 		return true;

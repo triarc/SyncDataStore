@@ -434,13 +434,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
 
 	private void lockUi(SyncTypeCollection collection) {
 		Intent intent = new Intent(SYNC_BLOCK);
-		intent.putExtra("collection", collection.getName());
+		intent.putExtra(SYNC_TYPE, collection.getName());
 		this.getContext().sendBroadcast(intent);
 	}
 
 	private void unlockUi(SyncTypeCollection collection) {
 		Intent intent = new Intent(SYNC_UNBLOCK);
-		intent.putExtra("collection", collection.getName());
+		intent.putExtra(SYNC_TYPE, collection.getName());
 		this.getContext().sendBroadcast(intent);
 	}
 

@@ -26,6 +26,12 @@ function SyncDataStore() {
 	SyncDataStore.prototype.onError = function(collectionName, callback, error){
 		cordova.exec(callback, error, "SyncDataStore", "onError", [collectionName]);
 	};
+	SyncDataStore.prototype.onSyncStateChanged = function(callback, error){
+		cordova.exec(function(result) {
+			callback(result.state, result.collectionName);
+		}, error, "SyncDataStore", "onSyncStateChanged", []);
+	};
+	
 };
 module.exports = new SyncDataStore();
 
